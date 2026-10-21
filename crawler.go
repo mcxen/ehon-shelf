@@ -64,37 +64,48 @@ var (
 // waitForUnban blocks until the site answers this path again, polling every
 // banPoll up to limit. It returns false only if the crawler was paused; a
 // site that never recovers is reported by the caller after maxBanRetries.
+//
+// The probe uses a throwaway client rather than the crawler's: the crawler's
+// jar and connection pool both hold state from the refused request, and
+// probing through them kept reporting 403 for a page that a clean client
+// fetched fine. Once the probe succeeds the crawler starts over with a fresh
+// jar too, so the stale session does not poison the retry.
 func (c *Crawler) waitForUnban(path string, limit time.Duration) bool {
 	deadline := time.Now().Add(limit)
+	slice := min(banPoll, time.Second)
 	for time.Now().Before(deadline) {
-		// Sleep in short slices so a pause interrupts promptly, but cap each
-		// nap at banPoll so a test's tiny banPoll does not become a 1s wait.
-		slice := min(banPoll, time.Second)
 		for waited := time.Duration(0); waited < banPoll; waited += slice {
 			if c.paused() {
 				return false
 			}
 			time.Sleep(slice)
 		}
-		c.client.CloseIdleConnections()
-		req, err := http.NewRequest("GET", Base+path, nil)
-		if err != nil {
-			continue
-		}
-		setHeaders(req)
-		resp, err := c.client.Do(req)
-		if err != nil {
-			continue
-		}
-		code := resp.StatusCode
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if code != 403 && code != 451 {
-			log.Printf("封禁已解除（探测 %s → %d），继续", path, code)
+		if probeOK(path) {
+			log.Printf("封禁已解除（%s 已可访问），继续", path)
+			c.client.CloseIdleConnections()
+			c.client.Jar, _ = cookiejar.New(nil)
 			return true
 		}
 	}
 	return true // let the caller retry; maxBanRetries bounds the loop
+}
+
+// probeOK fetches path with a clean client: no jar, no pooled connection.
+func probeOK(path string) bool {
+	cli := newClient()
+	defer cli.CloseIdleConnections()
+	req, err := http.NewRequest("GET", Base+path, nil)
+	if err != nil {
+		return false
+	}
+	setHeaders(req)
+	resp, err := cli.Do(req)
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode != 403 && resp.StatusCode != 451
 }
 
 var bibKeys = []string{"通番", "絵師名", "よみがな１", "作品名", "よみがな２", "技法", "版型", "点数", "板行年", "西暦", "作品ﾌｧｲﾙNo.", "備考", "請求記号", "図書ID"}
