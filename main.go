@@ -579,6 +579,12 @@ func (a *app) settingsView(c *ui.Context) {
 			}
 			ui.Text(c, msg).TextColor(muted)
 		})
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, "导入本地数据包…").Disabled(a.sampleBusy).Clicked() {
+				a.importLocal()
+			}
+			ui.Text(c, "选择用户脚本导出的 ehonshelf-*.zip（可多选），已有文件不会被覆盖").TextColor(muted)
+		})
 		section("下载进度")
 		s := a.status
 		line := stateNames[s.State]
@@ -685,6 +691,29 @@ func (a *app) downloadSample() {
 				return
 			}
 			a.sampleMsg = "示例数据已导入"
+			a.rescan()
+		})
+	})
+}
+
+// importLocal imports zip files chosen by the user (e.g. from the userscript).
+func (a *app) importLocal() {
+	dir := a.conf.DataDir
+	a.async(func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择数据包", Multiple: true,
+			DefaultPath: DownloadsDir(), Filters: []mygo.FileFilter{{Name: "ZIP 数据包", Extensions: []string{"zip"}}}})
+		if err != nil || len(paths) == 0 {
+			return
+		}
+		a.update(func() { a.sampleBusy, a.sampleMsg = true, "正在导入…" })
+		n, err := ImportZips(paths, dir)
+		a.update(func() {
+			a.sampleBusy = false
+			if err != nil {
+				a.sampleMsg = "导入失败：" + err.Error()
+			} else {
+				a.sampleMsg = fmt.Sprintf("已导入 %d 个数据包", n)
+			}
 			a.rescan()
 		})
 	})

@@ -48,6 +48,20 @@ Windows 出现 SmartScreen 提示时选择「更多信息」→「仍要运行�
 数据格式与 Python 版相同（`<编号>/meta.json`、`pages/0001.jpg`…、`cover.jpg`），旧数据可直接使用。
 若可执行文件旁有 `sample-data.zip`，首次运行且书库为空时会自动导入。
 
+## 浏览器用户脚本导出（应用无法直接访问网站时）
+
+如果网站的防火墙拒绝应用的请求，可以在自己能正常浏览该网站的浏览器里用用户脚本导出数据，再导入应用。
+
+1. 安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/)（Chrome / Edge / Firefox / Safari 均可；Firefox 也可用 Greasemonkey）。
+2. 打开脚本地址，Tampermonkey 会提示安装：
+   https://raw.githubusercontent.com/mcxen/ehon-shelf/main/userscript/ehonshelf-export.user.js
+3. 访问 https://lapis.nichibun.ac.jp/enp/ ，页面右下角会出现「EhonShelf 数据导出」面板：
+   - 作品编号：如 `1-50,81`，或填 `all` 导出全部；
+   - 每个数据包作品数：每导出这么多部作品就下载一个 `ehonshelf-<起>-<止>.zip`（默认 5，避免占用过多内存）；
+   - 点击「开始」；「暂停」后再点「开始」即可继续，已导出的作品记录在浏览器中会自动跳过（可用「清除已导出记录」重置）。
+   脚本每秒最多发出 1 个同源请求；遇到 403 / 429 会立即停止，并先把已完成的作品打包下载。
+4. 在应用中打开「设置」→「导入本地数据包…」，选择下载的 zip（可多选），已有文件不会被覆盖。
+
 ## 礼貌抓取说明
 
 - 所有请求串行发送，默认间隔 1.2 秒，最小 1 秒，不可设置更低

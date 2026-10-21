@@ -255,6 +255,28 @@ func ImportSample(zipPath, dataDir string) error {
 	return nil
 }
 
+// ImportZips imports several data zips (same layout as sample-data.zip) and
+// returns how many were imported.
+func ImportZips(paths []string, dataDir string) (int, error) {
+	for i, p := range paths {
+		if err := ImportSample(p, dataDir); err != nil {
+			return i, fmt.Errorf("%s: %w", filepath.Base(p), err)
+		}
+	}
+	return len(paths), nil
+}
+
+// DownloadsDir is ~/Downloads when it exists, else the home directory.
+func DownloadsDir() string {
+	h, _ := os.UserHomeDir()
+	if d := filepath.Join(h, "Downloads"); h != "" {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			return d
+		}
+	}
+	return h
+}
+
 // DownloadSample fetches sample-data.zip from the latest release and imports it.
 func DownloadSample(dataDir string, progress func(string)) error {
 	req, _ := http.NewRequest("GET", SampleURL, nil)

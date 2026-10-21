@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"image"
 	"image/color"
@@ -132,5 +133,25 @@ func TestParsers(t *testing.T) {
 	sh := ParseShoshi(`<td>絵師名</td><td>寺沢昌次</td><td>板行年</td><td>西暦</td>`)
 	if sh["絵師名"] != "寺沢昌次" || sh["板行年"] != "" {
 		t.Errorf("shoshi %v", sh)
+	}
+}
+
+func TestImportZips(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	zp := filepath.Join(src, "ehonshelf-1-1.zip")
+	f, _ := os.Create(zp)
+	zw := zip.NewWriter(f)
+	for name, body := range map[string]string{"5/meta.json": `{"id":5,"title":"t","pages":[]}`, "5/pages/0001.jpg": "x"} {
+		w, _ := zw.Create(name)
+		w.Write([]byte(body))
+	}
+	zw.Close()
+	f.Close()
+	n, err := ImportZips([]string{zp}, dst)
+	if err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	if bs := ScanLibrary(dst); len(bs) != 1 || bs[0].ID != 5 {
+		t.Fatalf("%+v", bs)
 	}
 }
