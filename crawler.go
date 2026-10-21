@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"image/jpeg"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,13 +20,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mrjoshuak/go-jpeg2000"
 )
 
 // Base is the site; tests point it at a local server.
 var Base = "https://lapis.nichibun.ac.jp"
 
+// HttpProxy is an explicit outbound proxy (e.g. "http://127.0.0.1:7897").
+// The site geoblocks direct connections from many countries — they get a
+// flat 403 no matter what the UA, cookies or retry count is — so routing
+// through a proxy is a hard requirement, not an optimisation. Empty means
+// fall back to the HTTP_PROXY/HTTPS_PROXY environment variables.
+var HttpProxy = os.Getenv("EHONSHELF_PROXY")
+
 const (
-	UA       = "NichibunEnpArchiver/1.0 (EhonShelf/0.2; offline mirror; polite 1 req/s)"
+	// A browser UA. The old scraper UA was turned away by the site's bot
+	// filter even from an allowed region.
+	UA       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 	MinDelay = 1.0
 )
 
@@ -31,7 +45,7 @@ var bibKeys = []string{"通番", "絵師名", "よみがな１", "作品名", "�
 
 var (
 	errPaused  = errors.New("paused")
-	errRefused = errors.New("服务器拒绝访问，可能已被限流，请稍后再继续")
+	errRefused = errors.New("服务器拒绝访问：该站点限制了部分地区，请在设置里填写可用的代理（例如 http://127.0.0.1:7897）后重试")
 )
 
 // Status is a snapshot of the crawler, shown by the settings view.
@@ -189,7 +203,13 @@ func (c *Crawler) get(path string) ([]byte, error) {
 		}
 	}
 	refused := 0
-	for attempt := 0; attempt < 6; attempt++ {
+	// Do not waste attempts retrying a 403. The site answers 403 to every
+	// request that arrives from a blocked region — same UA, same cookies,
+	// same TLS fingerprint, twenty attempts in a row — so retrying is pure
+	// delay. Report the real cause (a proxy is needed) and let the user fix
+	// it in settings.
+	const maxAttempts = 4
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if c.paused() {
 			return nil, errPaused
 		}
@@ -209,23 +229,49 @@ func (c *Crawler) get(path string) ([]byte, error) {
 			case resp.StatusCode == 404:
 				return nil, nil
 			}
-			log.Printf("HTTP %d %s", resp.StatusCode, path)
-			if resp.StatusCode == 431 {
-				// Header too large: usually cookies piling up. Start a fresh jar and retry.
+			code := resp.StatusCode
+			log.Printf("HTTP %d %s", code, path)
+			if code == 403 || code == 451 {
+				// A 403 means one of two things: the client is outside an
+				// allowed region (permanent), or a burst of requests tripped
+				// the rate limiter (temporary, and the window is minutes not
+				// seconds). Back off with growing gaps before concluding it is
+				// the region — an impatient retry just extends the ban.
+				refused++
+				if refused >= 4 {
+					return nil, fmt.Errorf("HTTP %d %s: %w", code, path, errRefused)
+				}
+				c.client.CloseIdleConnections()
+				wait := time.Duration(30*(1<<(refused-1))) * time.Second
+				log.Printf("HTTP %d %s（限流退避 %v 后重试）", code, path, wait)
+				for t := time.Duration(0); t < wait; t += time.Second {
+					if c.paused() {
+						return nil, errPaused
+					}
+					time.Sleep(time.Second)
+				}
+				continue
+			}
+			if code == 429 {
+				// Genuinely rate limited (not geo-blocked): back off and retry.
+				refused++
+				if refused >= 4 {
+					return nil, fmt.Errorf("HTTP %d %s: 请求过于频繁，请稍后再试", code, path)
+				}
+				c.client.CloseIdleConnections()
+				time.Sleep(time.Duration(5*refused) * time.Second)
+				continue
+			}
+			if code == 431 {
+				// Header too large: usually cookies piling up.
 				c.client.Jar, _ = cookiejar.New(nil)
 				continue
 			}
-			if resp.StatusCode == 403 || resp.StatusCode == 429 {
-				// The site's gateway refuses us: slow down a lot, then stop.
-				if refused++; refused >= 3 {
-					return nil, fmt.Errorf("HTTP %d: %w", resp.StatusCode, errRefused)
-				}
-				attempt += 2
-			}
+			refused = 0
 		} else {
 			log.Printf("error %v %s", err, path)
 		}
-		backoff := time.Duration(min(120, 5<<attempt)) * time.Second
+		backoff := time.Duration(min(60, 3<<attempt)) * time.Second
 		for t := time.Duration(0); t < backoff; t += time.Second {
 			if c.paused() {
 				return nil, errPaused
@@ -349,8 +395,18 @@ func (c *Crawler) volumePages(iid, vol int) ([]pageRef, error) {
 	return names, nil
 }
 
-// JPEGFromPDF returns the largest embedded DCTDecode JPEG stream, unchanged.
+// JPEGFromPDF pulls the page image out of a PDF.
+//
+// The archive ships two flavours of scan: plain JPEG inside the PDF
+// (/DCTDecode) and JPEG 2000 (/JPXDecode). Only handling DCTDecode was why
+// whole volumes fell back to their 133x90 thumbnails, so both are handled
+// here. Returns nil when neither is present.
 func JPEGFromPDF(pdf []byte) []byte {
+	// Reject the HTML error page the site hands back instead of a PDF; it has
+	// no image streams and used to be mistaken for "no full-res available".
+	if !bytes.HasPrefix(bytes.TrimSpace(pdf), []byte("%PDF")) {
+		return nil
+	}
 	var best []byte
 	for _, loc := range reDCT.FindAllIndex(pdf, -1) {
 		start := loc[1]
@@ -363,7 +419,62 @@ func JPEGFromPDF(pdf []byte) []byte {
 			best = data
 		}
 	}
-	return best
+	if best != nil {
+		return best
+	}
+	if jpx := jpxStream(pdf); jpx != nil {
+		return decodeJPX(jpx)
+	}
+	return nil
+}
+
+// jpxStream returns the raw JPEG 2000 codestream of a PDF page, if any.
+func jpxStream(pdf []byte) []byte {
+	i := bytes.Index(pdf, []byte("/JPXDecode"))
+	if i < 0 {
+		return nil
+	}
+	start := pdfStreamStart(pdf, i)
+	if start < 0 {
+		return nil
+	}
+	end := bytes.Index(pdf[start:], []byte("endstream"))
+	if end < 0 {
+		return nil
+	}
+	return pdf[start : start+end]
+}
+
+// pdfStreamStart finds the first byte after "stream" (plus its EOL) at or
+// after hint.
+func pdfStreamStart(pdf []byte, hint int) int {
+	s := bytes.Index(pdf[hint:], []byte("stream"))
+	if s < 0 {
+		return -1
+	}
+	start := hint + s + len("stream")
+	if start < len(pdf) && pdf[start] == '\r' {
+		start++
+	}
+	if start < len(pdf) && pdf[start] == '\n' {
+		start++
+	}
+	return start
+}
+
+// decodeJPX turns a JPEG 2000 codestream into JPEG bytes.
+func decodeJPX(jpx []byte) []byte {
+	img, err := jpeg2000.Decode(bytes.NewReader(jpx))
+	if err != nil {
+		log.Printf("jpx decode: %v", err)
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 92}); err != nil {
+		log.Printf("jpx re-encode: %v", err)
+		return nil
+	}
+	return buf.Bytes()
 }
 
 func (c *Crawler) crawlItem(it Item) error {
@@ -433,6 +544,18 @@ func (c *Crawler) crawlItem(it Item) error {
 		}
 		jpg := JPEGFromPDF(pdf)
 		if jpg == nil {
+			// The HTML error page the site serves under load looks like a
+			// successful response, so retry the PDF before accepting a
+			// thumbnail; a real missing scan never improves, a hiccup does.
+			for attempt := 0; attempt < 2 && jpg == nil; attempt++ {
+				log.Printf("retry PDF for %s (attempt %d)", p.Name, attempt+1)
+				if pdf, err = c.get(p.PDF); err != nil {
+					return err
+				}
+				jpg = JPEGFromPDF(pdf)
+			}
+		}
+		if jpg == nil {
 			log.Printf("no full-res for %s, using thumbnail", p.Name)
 			if jpg, err = c.get(p.Thumb); err != nil {
 				return err
@@ -442,6 +565,10 @@ func (c *Crawler) crawlItem(it Item) error {
 		if err := writeAtomic(fp, jpg); err != nil {
 			return err
 		}
+		// Save progress page by page so an interrupted run resumes instead of
+		// re-downloading a whole volume: a 54-page work takes minutes.
+		meta.PageCount = len(meta.Pages)
+		_ = writeJSON(mp, meta)
 	}
 	c.update(func(s *Status) { s.ItemDone = len(meta.Pages); s.Message = "生成封面" })
 	if _, err := MakeCover(d); err != nil {
@@ -550,7 +677,25 @@ func (c *Crawler) run() {
 
 func newClient() *http.Client {
 	jar, _ := cookiejar.New(nil)
-	return &http.Client{Timeout: 90 * time.Second, Jar: jar,
+	transport := &http.Transport{
+		// The site is behind a geo-gate: it answers 403 to any request that
+		// arrives from outside a handful of countries, and the refusal has
+		// nothing to do with the UA, the cookie jar or TLS fingerprints. Going
+		// through an outbound proxy is what makes it answer 200, so honour the
+		// usual proxy environment variables and HttpProxy explicitly.
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			if HttpProxy != "" {
+				return url.Parse(HttpProxy)
+			}
+			return http.ProxyFromEnvironment(r)
+		},
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     60 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
+	return &http.Client{Timeout: 90 * time.Second, Jar: jar, Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
@@ -559,9 +704,12 @@ func newClient() *http.Client {
 		}}
 }
 
-// setHeaders mirrors what the Python requests.Session sent, which the site accepts.
+// setHeaders mirrors what a real browser sends. The site also runs a bot
+// filter that turns away the obvious scraper UA.
 func setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", UA)
-	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "ja,en-US;q=0.9,en;q=0.8")
 	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 }

@@ -65,6 +65,7 @@ type Book struct {
 type Config struct {
 	DataDir   string         `json:"data_dir"`
 	Delay     float64        `json:"delay"`
+	Proxy     string         `json:"proxy,omitempty"`
 	Positions map[string]int `json:"positions,omitempty"`
 	RTL       *bool          `json:"rtl,omitempty"`
 	Spread    bool           `json:"spread,omitempty"`

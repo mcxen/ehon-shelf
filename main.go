@@ -21,6 +21,7 @@ const (
 	viewShelf = iota
 	viewReader
 	viewSettings
+	viewLogs
 )
 
 type app struct {
@@ -55,6 +56,7 @@ type app struct {
 	loading map[int]bool
 
 	// settings
+	proxy         string
 	status        Status
 	remote        []Item
 	remoteFilter  []int
@@ -67,19 +69,25 @@ type app struct {
 	confMsg       string
 	sampleMsg     string
 	sampleBusy    bool
+
+	// logs
+	logs      *logBuffer
+	logScroll float64
 }
 
 func newApp() *app {
 	conf := LoadConfig()
 	_ = os.MkdirAll(conf.DataDir, 0o755)
 	a := &app{conf: conf, covers: map[int]*ui.Bitmap{}, pages: map[int]*ui.Bitmap{}, loading: map[int]bool{},
-		selected: map[int]bool{}, artist: "全部绘师", rtl: true, spread: conf.Spread, zoom: 1, delay: conf.Delay}
+		selected: map[int]bool{}, proxy: conf.Proxy, artist: "全部绘师", rtl: true, spread: conf.Spread, zoom: 1, delay: conf.Delay,
+		logs: newLogBuffer(800)}
 	if conf.RTL != nil {
 		a.rtl = *conf.RTL
 	}
 	a.update = func(fn func()) { fn() }
 	a.async = func(fn func()) { go fn() }
 	a.newCrawler()
+	a.logs.Append("EhonShelf 启动，数据目录 %s", conf.DataDir)
 	return a
 }
 
@@ -177,6 +185,8 @@ func (a *app) viewRoot(c *ui.Context) {
 			a.readerView(c)
 		case viewSettings:
 			a.settingsView(c)
+		case viewLogs:
+			a.logsView(c)
 		default:
 			a.shelfView(c)
 		}
@@ -197,6 +207,9 @@ func (a *app) shelfView(c *ui.Context) {
 		}
 		ui.Textf(c, "共 %d 部", len(a.filtered)).TextColor(t.TextMuted)
 		ui.Spacer(c)
+		if ui.Button(c, "日志").Clicked() {
+			a.view = viewLogs
+		}
 		if ui.Button(c, "设置").Clicked() {
 			a.openSettings()
 		}
@@ -532,6 +545,72 @@ func (a *app) setDataDir(dir string) {
 	a.loadRemote(false)
 }
 
+func (a *app) logsView(c *ui.Context) {
+	t := c.Theme()
+	muted := t.TextMuted
+	entries, _ := a.logs.Snapshot()
+
+	ui.Row(c).Gap(12).Padding(10, 16).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "返回书架").Clicked() {
+			a.view = viewShelf
+		}
+		ui.Text(c, "运行日志").FontSize(20).Bold()
+		ui.Textf(c, "%d 条", len(entries)).TextColor(muted)
+		ui.Spacer(c)
+		if ui.Button(c, "清空").Clicked() {
+			a.logs.Clear()
+		}
+		if ui.Button(c, "复制全部").Clicked() {
+			a.copyLogs(c, entries)
+		}
+	})
+	ui.Divider(c)
+
+	ui.Column(c).Grow(1).Padding(4, 16, 12, 16).Children(func() {
+		if len(entries) == 0 {
+			ui.Text(c, "还没有日志。下载时会在这里显示进度与 HTTP 状态。").TextColor(muted)
+			return
+		}
+		ui.ScrollBoth(c).Grow(1).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				for _, e := range entries {
+					ui.Textf(c, "%s  %s", e.When.Format("15:04:05"), e.Line).
+						FontSize(12).
+						TextColor(logColor(t, e.Line)).
+						SingleLine()
+				}
+			})
+		})
+	})
+}
+
+// logColor highlights the lines that matter when diagnosing a blocked download.
+func logColor(t *ui.Theme, line string) ui.Color {
+	switch {
+	case strings.Contains(line, "403"), strings.Contains(line, "429"),
+		strings.Contains(line, "error"), strings.Contains(line, "放弃"),
+		strings.Contains(line, "失败"):
+		return ui.RGBA(220, 80, 80, 255)
+	case strings.Contains(line, "200"), strings.Contains(line, "OK"),
+		strings.Contains(line, "完成"), strings.Contains(line, "成功"):
+		return ui.RGBA(70, 170, 90, 255)
+	default:
+		return t.TextMuted
+	}
+}
+
+// copyLogs puts the whole buffer on the clipboard as plain text.
+func (a *app) copyLogs(c *ui.Context, entries []logEntry) {
+	var b strings.Builder
+	for _, e := range entries {
+		b.WriteString(e.When.Format("15:04:05"))
+		b.WriteString("  ")
+		b.WriteString(e.Line)
+		b.WriteString("\n")
+	}
+	c.WriteClipboard(b.String())
+}
+
 func (a *app) settingsView(c *ui.Context) {
 	t := c.Theme()
 	muted := t.TextMuted
@@ -560,13 +639,22 @@ func (a *app) settingsView(c *ui.Context) {
 					a.confMsg = "下载进行中，请先暂停"
 				} else {
 					a.conf.Delay = max(MinDelay, a.delay)
+					a.conf.Proxy = strings.TrimSpace(a.proxy)
 					a.delay = a.conf.Delay
+					HttpProxy = a.conf.Proxy
 					_ = a.conf.Save()
 					a.newCrawler()
 					a.confMsg = "已保存"
 				}
 			}
 			ui.Text(c, a.confMsg).TextColor(muted)
+		})
+		// The site geoblocks whole regions: from a blocked IP every request
+		// returns 403 no matter how often it is retried. A proxy is the only
+		// way through, so it gets its own row with an explanation.
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.SearchField(c, &a.proxy).Label("代理").Placeholder("http://127.0.0.1:7897").Width(260)
+			ui.Text(c, "该站点限制了部分地区，直连会返回 403；填写可用的 HTTP 代理后点“保存”").TextColor(muted)
 		})
 		section("示例数据")
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -750,6 +838,7 @@ func (a *app) menu() *mygo.Menu {
 		{Label: "文件", Submenu: []*mygo.MenuItem{
 			{Label: "书架", Accelerator: "CmdOrCtrl+1", Click: do(func() { a.view = viewShelf })},
 			{Label: "设置", Accelerator: "CmdOrCtrl+,", Click: do(a.openSettings)},
+			{Label: "运行日志", Accelerator: "CmdOrCtrl+L", Click: do(func() { a.view = viewLogs })},
 			{Label: "重新读取书库", Accelerator: "CmdOrCtrl+R", Click: do(a.rescan)},
 			mygo.Separator(),
 			{Role: mygo.RoleQuit, Label: "退出"},
@@ -771,6 +860,16 @@ func main() {
 	// controls follow it.
 	mygo.App.SetLanguages("zh-Hans")
 	a := newApp()
+	// Prefer the proxy saved in settings; EHONSHELF_PROXY is the fallback
+	// already picked up by crawler.go.
+	if p := strings.TrimSpace(a.conf.Proxy); p != "" {
+		HttpProxy = p
+	}
+	// Route every log.Printf (crawler progress, HTTP status, retries) into
+	// the in-app log panel. A windowed launch has no visible stderr, so
+	// without this the download diagnostics are invisible to the user.
+	restoreLog := installLogCapture(a.logs)
+	defer restoreLog()
 	a.firstRun()
 	mygo.App.WhenReady(func() {
 		mygo.App.SetMenu(a.menu())
@@ -786,8 +885,11 @@ func main() {
 		a.update = a.win.Update
 		a.rescan()
 		// EHONSHELF_VIEW=settings opens the settings first (for screenshots and support).
-		if os.Getenv("EHONSHELF_VIEW") == "settings" {
+		switch os.Getenv("EHONSHELF_VIEW") {
+		case "settings":
 			a.openSettings()
+		case "logs":
+			a.view = viewLogs
 		}
 	})
 	if err := mygo.App.Run(); err != nil {

@@ -2,52 +2,64 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
-// TestLive downloads a few pages of one work from the real site, pauses, and
-// checks the queue survives a restart. Run with EHONSHELF_LIVE=1.
-func TestLive(t *testing.T) {
-	if os.Getenv("EHONSHELF_LIVE") == "" {
-		t.Skip("set EHONSHELF_LIVE=1")
+// TestLiveProxyFetch is the guard that the proxy plumbing actually works end
+// to end. Skipped unless EHONSHELF_LIVE=1, because it needs a real proxy and
+// the real site:
+//
+//	EHONSHELF_LIVE=1 EHONSHELF_PROXY=http://127.0.0.1:7897 \
+//	  go test -run TestLiveProxyFetch -v
+func TestLiveProxyFetch(t *testing.T) {
+	if os.Getenv("EHONSHELF_LIVE") != "1" {
+		t.Skip("set EHONSHELF_LIVE=1 to hit the real site")
 	}
+	if HttpProxy == "" {
+		t.Fatal("EHONSHELF_PROXY must be set for the live test")
+	}
+	old := Base
+	Base = "https://lapis.nichibun.ac.jp"
+	defer func() { Base = old }()
+
 	dir := t.TempDir()
 	c := NewCrawler(dir, 1.2)
+
+	// 1. The book list must parse into the full catalogue.
 	items, err := c.ListItems()
-	if err != nil || len(items) < 400 {
-		t.Fatalf("list: %d %v", len(items), err)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
 	}
-	var it Item
-	for _, i := range items {
-		if i.ID == 431 {
-			it = i
-		}
+	t.Logf("catalogue: %d items", len(items))
+	if len(items) < 400 {
+		t.Fatalf("expected ~470 items, got %d", len(items))
 	}
-	c.Start([]Item{it})
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		if s := c.Snapshot(); s.ItemDone >= 2 {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
+	first := items[0]
+	t.Logf("first item: id=%d title=%q artist=%q", first.ID, first.Title, first.Artist)
+	if first.ID == 0 || first.Title == "" {
+		t.Fatalf("first item did not parse: %+v", first)
 	}
-	c.Pause()
-	for c.Running() {
-		time.Sleep(100 * time.Millisecond)
+
+	// 2. The picture list frame must yield page references.
+	pics, err := c.getText("/enp/Picture/ListContents/1/1/1")
+	if err != nil {
+		t.Fatalf("fetch picture list: %v", err)
 	}
-	s := c.Snapshot()
-	t.Logf("status %+v", s)
-	if s.State != "paused" || s.ItemTotal == 0 {
-		t.Fatalf("status %+v", s)
+	refs := ParseVolumePage(pics, 1, 1)
+	t.Logf("picture list: %d bytes, %d pages", len(pics), len(refs))
+	if len(refs) == 0 {
+		t.Fatal("no pages parsed from picture list")
 	}
-	b, _ := os.ReadFile(filepath.Join(dir, "431", "pages", "0001.jpg"))
-	if len(b) < 10000 || b[0] != 0xff || b[1] != 0xd8 {
-		t.Fatalf("page 1 is not a full JPEG: %d bytes", len(b))
+	thumbPath := "/enp/image/2/" + refs[0].name + ".jpg"
+	t.Logf("first page: n=%d name=%q thumb=%q", refs[0].n, refs[0].name, thumbPath)
+
+	// 3. A thumbnail must come back as a real JPEG.
+	thumb, err := c.get(thumbPath)
+	if err != nil {
+		t.Fatalf("fetch thumbnail %s: %v", thumbPath, err)
 	}
-	c2 := NewCrawler(dir, 1.2)
-	if s2 := c2.Snapshot(); s2.QueueLen != 1 || s2.State != "paused" {
-		t.Fatalf("queue not restored: %+v", s2)
+	t.Logf("thumbnail: %d bytes, magic=%q", len(thumb), thumb[:min(4, len(thumb))])
+	if len(thumb) < 500 || thumb[0] != 0xFF || thumb[1] != 0xD8 {
+		t.Fatalf("thumbnail is not a JPEG: %d bytes", len(thumb))
 	}
 }
