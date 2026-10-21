@@ -888,6 +888,11 @@ func (a *app) menu() *mygo.Menu {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-fetchall" {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		fetchallMain()
+		return
+	}
 	// The app is written in Simplified Chinese; MyGo's own menus and
 	// controls follow it.
 	mygo.App.SetLanguages("zh-Hans")
