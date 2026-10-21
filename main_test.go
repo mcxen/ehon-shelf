@@ -66,10 +66,13 @@ func TestShelfReaderSettings(t *testing.T) {
 	a.filter()
 	tt.Frame()
 
-	// Open the book in the reader.
-	if err := tt.Click("愛生枕"); err != nil {
-		t.Fatal(err)
+	// Open the book directly: this test is about the reader, and the card's
+	// click target is keyed by book id, which a text click cannot reach.
+	if len(a.books) == 0 {
+		t.Fatal("no books")
 	}
+	a.openBook(&a.books[0])
+	tt.Frame()
 	if a.view != viewReader || !tt.HasText("第 1 / 3 图") {
 		t.Fatalf("reader texts %q", tt.Texts())
 	}
@@ -96,14 +99,13 @@ func TestShelfReaderSettings(t *testing.T) {
 	if LoadConfig().Positions["81"] != 2 {
 		t.Errorf("position not saved: %v", LoadConfig().Positions)
 	}
-	if err := tt.Click("返回书架"); err != nil {
-		t.Fatal(err)
-	}
+	// Back to the shelf: the reader's own button is gone, Esc closes it.
+	tt.Key(0, ui.KeyEscape)
 
-	// Settings, with the cached remote catalog.
-	if err := tt.Click("设置"); err != nil {
-		t.Fatal(err)
-	}
+	// Settings, with the cached remote catalog. The sidebar owns the entry
+	// now, so call what its click handler calls.
+	a.openSettings()
+	tt.Frame()
 	for _, s := range []string{"数据文件夹", "下载示例数据", "远程目录", "秋の寝覚", "共 2 部，已下载 1 部，已选 0 部"} {
 		if !tt.HasText(s) {
 			t.Errorf("settings lacks %q: %q", s, tt.Texts())

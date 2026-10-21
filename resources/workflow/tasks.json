@@ -1,0 +1,29 @@
+{
+  "groups": [
+    {"id": "verify", "titleKey": "taskGroup.verify"},
+    {"id": "release", "titleKey": "taskGroup.release"}
+  ],
+  "tasks": [
+    {
+      "id": "test",
+      "group": "verify",
+      "titleKey": "task.test",
+      "detailKey": "task.test.detail",
+      "argv": ["go", "test", "./..."]
+    },
+    {
+      "id": "vet",
+      "group": "verify",
+      "titleKey": "task.vet",
+      "detailKey": "task.vet.detail",
+      "argv": ["go", "vet", "./..."]
+    },
+    {
+      "id": "build",
+      "group": "release",
+      "titleKey": "task.build",
+      "detailKey": "task.build.detail",
+      "argv": ["go", "tool", "mygo", "build"]
+    }
+  ]
+}

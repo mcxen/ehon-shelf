@@ -1,0 +1,21 @@
+{
+  "language": "zh-Hans",
+  "confirmQuit": false,
+  "restorePage": true,
+  "appearance": "dark",
+  "vibrancy": false,
+  "background": "mist",
+  "fontFamily": "system",
+  "fontScale": 1.1,
+  "autoCheck": false,
+  "autoInstall": true,
+  "runOnSave": true,
+  "notifyUpdate": true,
+  "notifyDone": false,
+  "notifyFail": true,
+  "notifySound": false,
+  "shortcuts": {"sidebar.toggle": "CmdOrCtrl+Shift+B"},
+  "sidebarHidden": false,
+  "sidebarWidth": 280,
+  "lastModule": "workflow"
+}

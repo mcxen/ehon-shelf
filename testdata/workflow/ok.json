@@ -1,0 +1,8 @@
+{
+  "groups": [
+    {"id": "verify", "titleKey": "taskGroup.verify"}
+  ],
+  "tasks": [
+    {"id": "test", "group": "verify", "titleKey": "task.test", "detailKey": "task.test.detail", "argv": ["go", "test", "./..."]}
+  ]
+}

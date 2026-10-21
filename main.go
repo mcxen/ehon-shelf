@@ -15,6 +15,9 @@ import (
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
+
+	"github.com/mcxen/ehon-shelf/backend/settings"
+	ehonui "github.com/mcxen/ehon-shelf/frontend"
 )
 
 // proxyLabel is drawn next to the proxy field. ui.SearchField's own Label
@@ -38,7 +41,8 @@ type app struct {
 	async  func(fn func())
 	win    *mygo.Window
 
-	view int
+	view  int
+	shell *ehonui.App
 
 	// shelf
 	books    []Book
@@ -80,6 +84,18 @@ type app struct {
 	logScroll float64
 }
 
+// shellSettings is the little the shell reads: sidebar width, font scale and
+// appearance. EhonShelf's own config carries none of these, so the shell keeps
+// its defaults and the app's visual settings stay where they were.
+func (a *app) shellSettings() settings.Settings {
+	s := a.shell.Settings()
+	s.SidebarWidth = 216
+	if s.FontScale <= 0 {
+		s.FontScale = 1
+	}
+	return s
+}
+
 func newApp() *app {
 	conf := LoadConfig()
 	_ = os.MkdirAll(conf.DataDir, 0o755)
@@ -89,6 +105,7 @@ func newApp() *app {
 	if conf.RTL != nil {
 		a.rtl = *conf.RTL
 	}
+	a.shell = ehonui.New(settings.Default())
 	a.update = func(fn func()) { fn() }
 	a.async = func(fn func()) { go fn() }
 	a.newCrawler()
@@ -182,26 +199,33 @@ func (a *app) have(id int) bool {
 
 // --- views ---
 
+// viewRoot draws the window: a sidebar on the left and one card on the right
+// holding whichever view is selected. The reader takes the whole window.
 func (a *app) viewRoot(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Background).Children(func() {
+	if a.view == viewReader {
+		a.readerView(c)
+		return
+	}
+	a.shell.SetSettings(a.shellSettings())
+	a.shell.SetSections(a.sections())
+	a.shell.SetSection(sectionFor(a.view))
+	a.shell.OnSelect(func(sec string) { a.view = viewFor(sec) })
+	a.shell.View(c, func(body *ui.Context) {
 		switch a.view {
-		case viewReader:
-			a.readerView(c)
 		case viewSettings:
-			a.settingsView(c)
+			a.settingsBody(body)
 		case viewLogs:
-			a.logsView(c)
+			a.logsBody(body)
 		default:
-			a.shelfView(c)
+			a.shelfBody(body)
 		}
 	})
 }
 
-func (a *app) shelfView(c *ui.Context) {
+func (a *app) shelfBody(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Gap(12).Padding(10, 16).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "艳本资料书架").FontSize(20).Bold()
+	ui.Row(c).Gap(12).Padding(10, 0, 6, 0).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "书架").FontSize(17).Bold()
 		if ui.SearchField(c, &a.query).Label("搜索书名 / 绘师").Placeholder("搜索书名 / 绘师").Width(260).Changed() {
 			a.filter()
 		}
@@ -212,12 +236,6 @@ func (a *app) shelfView(c *ui.Context) {
 		}
 		ui.Textf(c, "共 %d 部", len(a.filtered)).TextColor(t.TextMuted)
 		ui.Spacer(c)
-		if ui.Button(c, "日志").Clicked() {
-			a.view = viewLogs
-		}
-		if ui.Button(c, "设置").Clicked() {
-			a.openSettings()
-		}
 	})
 	ui.Divider(c)
 	if len(a.books) == 0 {
@@ -573,15 +591,12 @@ func (a *app) setDataDir(dir string) {
 	a.loadRemote(false)
 }
 
-func (a *app) logsView(c *ui.Context) {
+func (a *app) logsBody(c *ui.Context) {
 	t := c.Theme()
 	muted := t.TextMuted
 	entries, _ := a.logs.Snapshot()
 
-	ui.Row(c).Gap(12).Padding(10, 16).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "返回书架").Clicked() {
-			a.view = viewShelf
-		}
+	ui.Row(c).Gap(12).Padding(8, 0, 6, 0).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "运行日志").FontSize(20).Bold()
 		ui.Textf(c, "%d 条", len(entries)).TextColor(muted)
 		ui.Spacer(c)
@@ -639,17 +654,10 @@ func (a *app) copyLogs(c *ui.Context, entries []logEntry) {
 	c.WriteClipboard(b.String())
 }
 
-func (a *app) settingsView(c *ui.Context) {
+func (a *app) settingsBody(c *ui.Context) {
 	t := c.Theme()
 	muted := t.TextMuted
-	section := func(s string) { ui.Text(c, s).FontSize(16).Bold().Margin(10, 0, 2, 0) }
-	ui.Row(c).Gap(12).Padding(10, 16).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "返回书架").Clicked() {
-			a.view = viewShelf
-		}
-		ui.Text(c, "设置").FontSize(20).Bold()
-	})
-	ui.Divider(c)
+	section := func(s string) { ui.Text(c, s).FontSize(15).Bold().Margin(12, 0, 4, 0) }
 	ui.Column(c).Grow(1).Padding(4, 20, 16, 20).Gap(6).Children(func() {
 		section("基本设置")
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {

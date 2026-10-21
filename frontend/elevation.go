@@ -1,0 +1,106 @@
+// Surfaces adapted from github.com/egoist/kero (MIT).
+package ehonui
+
+import (
+	"time"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// Surfaces follow Kero: in the light a soft shadow, in the dark a lit
+// hairline. These are the levels the sidebar rows, the card and the
+// settings controls stand on.
+
+func raised(e ui.Element, pal *palette) ui.Element {
+	if pal.dark {
+		return e.Border(1, pal.text.Alpha(0.12)).BorderLinearGradient(ui.LinearGradient{
+			Angle: 180, From: pal.text.Alpha(0.18), To: pal.text.Alpha(0.06),
+		}).Shadow(0, 1, 1, 0, ui.RGBA(0, 0, 0, 0.2)).Shadow(0, 4, 6, -3, ui.RGBA(0, 0, 0, 0.24))
+	}
+	return e.Shadow(0, 1, 2, 0, pal.cardShadow).Shadow(0, 1, 6, 0, pal.cardShadow2)
+}
+
+func chosen(e ui.Element, pal *palette) ui.Element {
+	if pal.dark {
+		return raised(e, pal)
+	}
+	return e.Shadow(0, 0, 0, 0.5, ui.RGBA(0, 0, 0, 0.06)).Shadow(0, 0.5, 2, 0, ui.RGBA(0, 0, 0, 0.05))
+}
+
+func floating(e ui.Element, pal *palette) ui.Element {
+	if pal.dark {
+		return raised(e, pal).Shadow(0, 16, 40, 0, pal.floatShadow)
+	}
+	return e.Shadow(0, 1, 3, 0, pal.cardShadow).Shadow(0, 16, 40, 0, pal.floatShadow)
+}
+
+func face(e ui.Element, pal *palette, bg ui.Color) ui.Element {
+	e.Background(bg)
+	if pal.controlShadow {
+		return e.Shadow(0, 0.5, 1.5, 0, ui.RGBA(0, 0, 0, 0.13)).Shadow(0, 0, 0, 0.5, ui.RGBA(0, 0, 0, 0.05))
+	}
+	return raised(e, pal)
+}
+
+func button(c *ui.Context, key, label, keys string, primary bool, pal *palette) bool {
+	b := ui.ButtonBase(c.Key(key)).Height(30).Padding(0, 14).Gap(8).Radius(8).AlignItems(ui.Center).Label(label)
+	bg, fg := pal.control, pal.text
+	if primary {
+		bg, fg = pal.accent, ui.Hex("#ffffff")
+	}
+	switch {
+	case b.Pressed():
+		bg = bg.Mix(ui.Hex("#000000"), 0.08)
+	case b.Hovered() && primary:
+		bg = bg.Mix(ui.Hex("#ffffff"), 0.08)
+	case b.Hovered():
+		bg = pal.controlHover
+	}
+	face(b, pal, b.AnimateColor("bg", bg, ui.Animation{Duration: 90 * time.Millisecond})).TextColor(fg)
+	b.Children(func() {
+		ui.Text(c, label).FontSize(13).FontWeight(500).SingleLine()
+		if keys != "" {
+			ui.Text(c, keys).FontSize(12).TextColor(fg.Alpha(0.55)).SingleLine()
+		}
+	})
+	return b.Clicked()
+}
+
+func (a *App) theme(c *ui.Context, pal *palette) *ui.Theme {
+	t := *c.Theme()
+	t.Accent = pal.accent
+	t.Selection = pal.accent.Alpha(0.25)
+	t.Border = ui.Transparent
+	t.Surface = pal.control
+	t.SurfaceHover = pal.controlHover
+	t.SurfacePressed = pal.controlHover.Mix(pal.text, 0.06)
+	t.Text = pal.text
+	t.TextMuted = pal.textMuted
+	if fam := a.fontFamily(); fam != "" {
+		t.Font = fam
+	}
+	scale := a.set.FontScale
+	if scale <= 0 {
+		scale = 1
+	}
+	t.FontSize = 13 * float32(scale)
+	return &t
+}
+
+func toggle(c *ui.Context, on *bool, pal *palette) ui.Element {
+	sw := ui.SwitchBase(c, on).Size(38, 22).Radius(11).Padding(2).Shrink(0)
+	track := pal.text.Alpha(0.14)
+	if pal.dark {
+		track = ui.RGBA(255, 255, 255, 0.2)
+	}
+	if *on {
+		track = pal.accent
+	}
+	sw.Background(sw.AnimateColor("track", track, ui.Animation{Duration: 150 * time.Millisecond}))
+	x := sw.AnimateTo("knob", b2f(*on)*16, ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.15}})
+	sw.Children(func() {
+		ui.Box(c).Size(18, 18).Radius(9).Background(ui.Hex("#ffffff")).Translate(x, 0).
+			Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.22))
+	})
+	return sw
+}
