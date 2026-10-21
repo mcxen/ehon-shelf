@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>艳本资料书架</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{margin:0;font-family:"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif;background:#2b2118;color:#eee}
+header{display:flex;gap:12px;align-items:center;padding:12px 20px;background:#1c140e;position:sticky;top:0;z-index:2}
+header h1{font-size:20px;margin:0 16px 0 0;color:#e8d6b0}
+input,select,button{font-size:14px;padding:6px 10px;border-radius:4px;border:1px solid #6b5640;background:#3a2c20;color:#eee;cursor:pointer}
+input{cursor:text;width:260px}
+#shelf{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px;padding:24px;
+ background:repeating-linear-gradient(#2b2118 0 250px,#5a3d22 250px 262px)}
+.book{cursor:pointer;text-align:center}
+.book .c{height:200px;display:flex;align-items:flex-end;justify-content:center}
+.book img{max-width:150px;max-height:200px;box-shadow:3px 3px 8px #000}
+.book .t{font-size:13px;margin-top:6px;color:#f3e6cc}.book .a{font-size:12px;color:#b8a488}
+.book.missing img{opacity:.35}
+#reader{position:fixed;inset:0;background:#111;display:none;flex-direction:column;z-index:5}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#000}
+#bar .ti{flex:1;color:#e8d6b0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#stage{flex:1;overflow:auto;display:flex;justify-content:center;align-items:center}
+#pages{display:flex;gap:2px;transform-origin:center}
+#pages img{max-height:calc(100vh - 60px);max-width:100%;object-fit:contain}
+#pages.zoomed img{max-height:none;max-width:none}
+.nav{position:fixed;top:50%;font-size:40px;background:none;border:none;color:#888}
+#prev{left:6px}#next{right:6px}
+#settings{position:fixed;inset:0;background:#241b13;z-index:4;display:none;overflow:auto;padding:16px 24px}
+#settings h2{color:#e8d6b0;font-size:18px;margin:18px 0 8px}#settings .row{display:flex;gap:10px;align-items:center;margin:8px 0;flex-wrap:wrap}
+#settings label{color:#d8c6a6}#rlist{max-height:46vh;overflow:auto;border:1px solid #6b5640;background:#1c140e}
+#rlist table{width:100%;border-collapse:collapse;font-size:13px}#rlist td{padding:3px 8px;border-bottom:1px solid #3a2c20}
+#rlist tr.have td{color:#8fbf7f}progress{width:320px;height:14px}.muted{color:#a8957a;font-size:13px}
+</style></head><body>
+<header><h1>艳本资料书架</h1><input id="q" placeholder="搜索书名 / 绘师"><select id="artist"><option value="">全部绘师</option></select><span id="count"></span><span style="flex:1"></span><button id="openset">设置</button></header>
+<div id="shelf"></div>
+<div id="settings">
+<div class="row"><button id="closeset">返回书架</button><h2 style="margin:0">设置</h2></div>
+<h2>基本设置</h2>
+<div class="row"><label>数据文件夹</label><input id="ddir" style="width:420px"></div>
+<div class="row"><label>请求间隔（秒，最小 1）</label><input id="delay" type="number" step="0.1" min="1" style="width:90px"><button id="saveconf">保存</button><span id="confmsg" class="muted"></span></div>
+<h2>示例数据</h2>
+<div class="row"><button id="sample">下载示例数据</button><span id="samplemsg" class="muted">从 GitHub 最新发布版下载 3 部示例作品</span></div>
+<h2>下载进度</h2>
+<div class="row"><span id="stline">空闲</span></div>
+<div class="row"><label>当前作品</label><progress id="pitem" max="1" value="0"></progress><span id="pitemt" class="muted"></span></div>
+<div class="row"><label>总体进度</label><progress id="pall" max="1" value="0"></progress><span id="pallt" class="muted"></span></div>
+<div class="row"><button id="pause">暂停</button><button id="resume">继续</button><span id="errs" class="muted"></span></div>
+<h2>远程目录</h2>
+<div class="row"><button id="fetchr">获取目录列表</button><button id="refreshr">重新获取</button>
+<input id="rq" placeholder="筛选" style="width:200px"><button id="selall">全选</button><button id="selnone">全不选</button>
+<button id="dlsel">下载所选</button><button id="dlall">下载全部</button><span id="rcount" class="muted"></span></div>
+<div id="rlist"><table><tbody id="rbody"></tbody></table></div>
+<p class="muted">数据来源：国際日本文化研究センター「艶本資料データベース」。下载会按设定间隔逐个请求，遵守 robots.txt，可随时暂停，下次继续时自动跳过已下载的页面。</p>
+</div>
+<div id="reader"><div id="bar">
+<button id="close">返回书架</button><span class="ti" id="rt"></span>
+<button id="dir"></button><button id="spread"></button>
+<button id="zo">缩小</button><button id="zi">放大</button><button id="zr">适应窗口</button>
+<span id="pn"></span><input id="jump" type="number" min="1" style="width:70px" placeholder="页码"></div>
+<div id="stage"><div id="pages"></div></div>
+<button class="nav" id="prev">&#8249;</button><button class="nav" id="next">&#8250;</button></div>
+<script src="app.js"></script><script src="settings.js"></script></body></html>

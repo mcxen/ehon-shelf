@@ -1,0 +1,10 @@
+data/
+build/
+dist/
+*.spec
+*.zip
+*.tar.gz
+*.dmg
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,66 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            asset: EhonShelf-macos-arm64.zip
+          - os: windows-latest
+            asset: EhonShelf-windows-x64.zip
+          - os: ubuntu-22.04
+            asset: EhonShelf-linux-x64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller -r requirements.txt
+      - run: python scripts/build.py
+      - name: package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist && ditto -c -k --keepParent EhonShelf.app ../${{ matrix.asset }}
+          cd .. && hdiutil create -volname EhonShelf -srcfolder dist/EhonShelf.app -ov -format UDZO EhonShelf-macos-arm64.dmg
+      - name: package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/EhonShelf.exe, README.md, LICENSE -DestinationPath ${{ matrix.asset }}
+      - name: package (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.asset }} -C dist EhonShelf -C .. README.md LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: |
+            EhonShelf-*.zip
+            EhonShelf-*.tar.gz
+            EhonShelf-*.dmg
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: carry over sample-data.zip from an earlier release
+        run: |
+          for t in $(gh release list --limit 20 --json tagName -q '.[].tagName'); do
+            if gh release download "$t" -p sample-data.zip -D out 2>/dev/null; then echo "sample from $t"; break; fi
+          done
+          ls -la out
+      - name: publish
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "安装包见下方附件。sample-data.zip 为 3 部示例作品（数据版权归国際日本文化研究センター）。"
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber
