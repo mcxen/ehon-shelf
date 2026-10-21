@@ -64,11 +64,16 @@ func TestLiveDownloadFiveWorks(t *testing.T) {
 		start := time.Now()
 		t.Logf("--- START id=%d %q ---", it.ID, it.Title)
 		r := result{Item: it}
+		// A single banned request legitimately takes banWait (10 min) to
+		// resume, so this guard must sit well above banWait * maxBanRetries;
+		// a shorter one aborts the run in the middle of a legitimate wait and
+		// reports the bug it is meant to catch.
+		guard := banWait*time.Duration(maxBanRetries) + 5*time.Minute
 		done := make(chan error, 1)
 		go func(target Item) { done <- c.crawlItem(target) }(it)
 		select {
 		case r.Err = <-done:
-		case <-time.After(10 * time.Minute):
+		case <-time.After(guard):
 			r.Err = errTimeout
 		}
 
