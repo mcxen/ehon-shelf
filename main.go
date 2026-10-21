@@ -434,19 +434,24 @@ func (a *app) readerView(c *ui.Context) {
 			a.clampPos()
 		}
 	})
+	// The page area gets its own box so MyGo lays the pages out against the
+	// real area. c.Size() is the whole window's content size, which includes
+	// the toolbar and the pager above, so sizing pages from it made them too
+	// tall and clipped the bottom of every scan.
 	ui.Row(c).Grow(1).Basis(0).MinHeight(0).Clip().AlignItems(ui.Stretch).Background(ui.RGB(17, 17, 17)).Children(func() {
 		if ui.Button(c, "‹").Width(40).Label("左翻页").Clicked() {
 			a.left()
 		}
-		w, h := c.Size()
-		if a.zoom <= 1 {
-			ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Justify(ui.Center).Gap(2).Children(func() { a.pageImages(c, 0, 0) })
-		} else {
-			ph := (h - 60) * float32(a.zoom)
-			ui.ScrollBoth(c).Grow(1).Children(func() {
-				ui.Row(c).Gap(2).Children(func() { a.pageImages(c, ph, w) })
+		ui.Box(c).Grow(1).MinWidth(0).Clip().Children(func() {
+			// Scrolling vertically keeps the pages as tall as zoom asks for.
+			// Nesting them in a Grow+Basis(0) row squeezed them back to the
+			// viewport every time, which is why zoom never appeared to work.
+			ui.Scroll(c).Children(func() {
+				ui.Row(c).Gap(2).Justify(ui.Center).Padding(6).Children(func() {
+					a.pageImages(c, a.zoom)
+				})
 			})
-		}
+		})
 		if ui.Button(c, "›").Width(40).Label("右翻页").Clicked() {
 			a.right()
 		}
@@ -454,19 +459,37 @@ func (a *app) readerView(c *ui.Context) {
 	_ = t
 }
 
-func (a *app) pageImages(c *ui.Context, height, _ float32) {
+// pageImages draws the visible pages. zoom scales the page height against the
+// height MyGo gives the page area: at zoom 1 an image is as tall as the area
+// and as wide as its aspect ratio allows, so nothing is stretched or clipped;
+// above 1 it grows past the area and the surrounding Scroll lets the reader
+// pan. Height is never taken from c.Size(), which includes the toolbar.
+func (a *app) pageImages(c *ui.Context, zoom float64) {
+	z := float32(max(1, zoom))
 	for _, i := range a.visible() {
 		bmp := a.pages[i]
 		if bmp == nil {
 			ui.Text(c.Key(i), "加载中…").TextColor(ui.RGB(150, 150, 150)).AlignSelf(ui.Center)
 			continue
 		}
-		img := ui.Image(c.Key(i), bmp)
-		if height > 0 {
-			bw, bh := bmp.Size()
-			img.Size(height*float32(bw)/float32(bh), height)
-		} else {
-			img.Fit(ui.Contain).Grow(1).Basis(0).MinWidth(0).MinHeight(0)
+		bw, bh := bmp.Size()
+		if bw <= 0 || bh <= 0 {
+			ui.Image(c.Key(i), bmp).Fit(ui.Contain).Grow(1)
+			continue
+		}
+		// Height comes from the layout, not from a number we guess: Grow fills
+		// the page area, and AspectRatio derives the width from it, so the scan
+		// is never stretched. Zoom scales the height past the viewport, which
+		// the surrounding Scroll then lets the reader pan.
+		img := ui.Image(c.Key(i), bmp).
+			Fit(ui.Contain).
+			AspectRatio(float32(bw) / float32(bh)).
+			Grow(1).
+			MinWidth(0)
+		if z > 1 {
+			// A percentage height above the area is what lets zoom escape the
+			// viewport; at zoom 1 Grow alone already fits it.
+			img.HeightPercent(100 * z)
 		}
 	}
 }
