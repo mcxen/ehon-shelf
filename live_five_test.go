@@ -62,6 +62,7 @@ func TestLiveDownloadFiveWorks(t *testing.T) {
 	var results []result
 	for _, it := range picked {
 		start := time.Now()
+		t.Logf("--- START id=%d %q ---", it.ID, it.Title)
 		r := result{Item: it}
 		done := make(chan error, 1)
 		go func(target Item) { done <- c.crawlItem(target) }(it)

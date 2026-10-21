@@ -234,16 +234,24 @@ func (c *Crawler) get(path string) ([]byte, error) {
 			if code == 403 || code == 451 {
 				// A 403 means one of two things: the client is outside an
 				// allowed region (permanent), or a burst of requests tripped
-				// the rate limiter (temporary, and the window is minutes not
-				// seconds). Back off with growing gaps before concluding it is
-				// the region — an impatient retry just extends the ban.
+				// the rate limiter. The measured limit is roughly eight to ten
+				// requests before the ban lands, and the window lasts minutes,
+				// so waiting seconds does nothing — back off in minutes and
+				// slow the whole crawler down, otherwise the next page trips
+				// it again.
 				refused++
 				if refused >= 4 {
 					return nil, fmt.Errorf("HTTP %d %s: %w", code, path, errRefused)
 				}
 				c.client.CloseIdleConnections()
-				wait := time.Duration(30*(1<<(refused-1))) * time.Second
-				log.Printf("HTTP %d %s（限流退避 %v 后重试）", code, path, wait)
+				wait := time.Duration(60*(1<<(refused-1))) * time.Second
+				// Learned limit, kept for the rest of the run: retrying at the
+				// original pace walks straight back into the ban.
+				slow := 3 * time.Second
+				if c.Delay < slow {
+					c.Delay = slow
+				}
+				log.Printf("HTTP %d %s（限流，退避 %v，并把间隔调到 %v）", code, path, wait, c.Delay)
 				for t := time.Duration(0); t < wait; t += time.Second {
 					if c.paused() {
 						return nil, errPaused
