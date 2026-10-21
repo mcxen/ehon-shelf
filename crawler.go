@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,7 +70,7 @@ func NewCrawler(dataDir string, delay float64) *Crawler {
 		delay = MinDelay
 	}
 	c := &Crawler{DataDir: dataDir, Delay: time.Duration(delay * float64(time.Second)),
-		client: &http.Client{Timeout: 90 * time.Second}, st: Status{State: "idle"}}
+		client: newClient(), st: Status{State: "idle"}}
 	c.queue = c.loadQueue()
 	if len(c.queue) > 0 {
 		c.st.State, c.st.Message, c.st.QueueLen = "paused", "上次未完成的下载可继续", len(c.queue)
@@ -128,7 +129,7 @@ func (c *Crawler) robots() {
 	c.robotsOK = true
 	c.last = time.Now()
 	req, _ := http.NewRequest("GET", Base+"/robots.txt", nil)
-	req.Header.Set("User-Agent", UA)
+	setHeaders(req)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return
@@ -197,7 +198,7 @@ func (c *Crawler) get(path string) ([]byte, error) {
 		}
 		c.last = time.Now()
 		req, _ := http.NewRequest("GET", Base+path, nil)
-		req.Header.Set("User-Agent", UA)
+		setHeaders(req)
 		resp, err := c.client.Do(req)
 		if err == nil {
 			b, rerr := io.ReadAll(resp.Body)
@@ -209,6 +210,11 @@ func (c *Crawler) get(path string) ([]byte, error) {
 				return nil, nil
 			}
 			log.Printf("HTTP %d %s", resp.StatusCode, path)
+			if resp.StatusCode == 431 {
+				// Header too large: usually cookies piling up. Start a fresh jar and retry.
+				c.client.Jar, _ = cookiejar.New(nil)
+				continue
+			}
 			if resp.StatusCode == 403 || resp.StatusCode == 429 {
 				// The site's gateway refuses us: slow down a lot, then stop.
 				if refused++; refused >= 3 {
@@ -540,4 +546,22 @@ func (c *Crawler) run() {
 		c.mu.Unlock()
 		c.update(func(*Status) {})
 	}
+}
+
+func newClient() *http.Client {
+	jar, _ := cookiejar.New(nil)
+	return &http.Client{Timeout: 90 * time.Second, Jar: jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		}}
+}
+
+// setHeaders mirrors what the Python requests.Session sent, which the site accepts.
+func setHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", UA)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Connection", "keep-alive")
 }
