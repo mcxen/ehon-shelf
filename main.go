@@ -464,9 +464,15 @@ func (a *app) loadRemote(refresh bool) {
 		var err error
 		if b, e := os.ReadFile(cache); e == nil && !refresh {
 			err = jsonUnmarshal(b, &items)
+		} else if !refresh {
+			// No network needed: start from the catalog built into the app.
+			err = jsonUnmarshal(builtinCatalog, &items)
 		} else {
 			if items, err = cr.ListItems(); err == nil {
 				_ = writeJSON(cache, items)
+			} else if e := jsonUnmarshal(builtinCatalog, &items); e == nil {
+				err = nil
+				defer func() { a.update(func() { a.remoteMsg = "联网刷新失败，显示内置目录" }) }()
 			}
 		}
 		a.update(func() {
