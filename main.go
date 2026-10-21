@@ -17,6 +17,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// proxyLabel is drawn next to the proxy field. ui.SearchField's own Label
+// is not rendered, and a bare box with a grey placeholder was invisible to
+// users looking for the setting.
+const proxyLabel = "代理（站点限制地区，直连会 403，必须填）"
+
 const (
 	viewShelf = iota
 	viewReader
@@ -631,30 +636,34 @@ func (a *app) settingsView(c *ui.Context) {
 				a.pickFolder()
 			}
 		})
+		// The site geoblocks whole regions: from a blocked IP every request
+		// returns 403 no matter how often it is retried, so the proxy is the
+		// one setting a user cannot do without. It goes first, with the same
+		// explicit text label the other rows use — ui.SearchField's own Label
+		// is not drawn, which made the proxy box look like a stray search box
+		// and left people unable to find it.
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, proxyLabel)
+			ui.SearchField(c, &a.proxy).Placeholder("http://127.0.0.1:7897").Width(260)
+			ui.Text(c, "填好后点下面的「保存」").TextColor(muted)
+		})
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "请求间隔（秒，最小 1）")
 			ui.NumberInput(c, &a.delay, MinDelay, 30, 0.1).Label("请求间隔").Width(130)
 			if ui.Button(c, "保存").Clicked() {
-				if a.cr.Running() {
-					a.confMsg = "下载进行中，请先暂停"
-				} else {
-					a.conf.Delay = max(MinDelay, a.delay)
-					a.conf.Proxy = strings.TrimSpace(a.proxy)
-					a.delay = a.conf.Delay
-					HttpProxy = a.conf.Proxy
-					_ = a.conf.Save()
+				// Proxy and delay are both written on save; stopping a running
+				// download to change the proxy would lose the queue.
+				a.conf.Delay = max(MinDelay, a.delay)
+				a.conf.Proxy = strings.TrimSpace(a.proxy)
+				a.delay = a.conf.Delay
+				HttpProxy = a.conf.Proxy
+				_ = a.conf.Save()
+				if !a.cr.Running() {
 					a.newCrawler()
-					a.confMsg = "已保存"
 				}
+				a.confMsg = "已保存"
 			}
 			ui.Text(c, a.confMsg).TextColor(muted)
-		})
-		// The site geoblocks whole regions: from a blocked IP every request
-		// returns 403 no matter how often it is retried. A proxy is the only
-		// way through, so it gets its own row with an explanation.
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.SearchField(c, &a.proxy).Label("代理").Placeholder("http://127.0.0.1:7897").Width(260)
-			ui.Text(c, "该站点限制了部分地区，直连会返回 403；填写可用的 HTTP 代理后点“保存”").TextColor(muted)
 		})
 		section("示例数据")
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
