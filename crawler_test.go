@@ -103,7 +103,10 @@ func TestQueuePersists(t *testing.T) {
 	if s := c2.Snapshot(); s.QueueLen != 2 || s.State != "paused" {
 		t.Fatalf("restored %+v", s)
 	}
-	if NewCrawler(dir, 0.2).Delay != time.Second {
-		t.Error("delay below the 1 s minimum")
+	if got := NewCrawler(dir, 0.2).Delay; got != safeDelay {
+		t.Errorf("delay = %v, want the measured-safe %v", got, safeDelay)
+	}
+	if got := NewCrawler(dir, 10).Delay; got != 10*time.Second {
+		t.Errorf("delay = %v, want the caller's slower 10s kept", got)
 	}
 }

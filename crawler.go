@@ -39,6 +39,21 @@ const (
 	// filter even from an allowed region.
 	UA       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 	MinDelay = 1.0
+
+	// Measured against the live site: 1 req/s trips the rate limiter after
+	// eight to ten requests, while 2 req/s ran twenty in a row and 3 req/s
+	// twenty-five, both untouched. safeDelay is the pace adopted for the
+	// rest of a run once a ban has been seen.
+	safeDelay = 3 * time.Second
+)
+
+// A ban clears on its own but the window is minutes, not seconds. Ten minutes
+// between attempts matches the observed behaviour and is what lets a long
+// crawl finish unattended instead of dying midway. Variables rather than
+// constants so tests can shrink the wait instead of sleeping for real.
+var (
+	banWait       = 10 * time.Minute
+	maxBanRetries = 6
 )
 
 var bibKeys = []string{"通番", "絵師名", "よみがな１", "作品名", "よみがな２", "技法", "版型", "点数", "板行年", "西暦", "作品ﾌｧｲﾙNo.", "備考", "請求記号", "図書ID"}
@@ -83,7 +98,14 @@ func NewCrawler(dataDir string, delay float64) *Crawler {
 	if delay < MinDelay {
 		delay = MinDelay
 	}
-	c := &Crawler{DataDir: dataDir, Delay: time.Duration(delay * float64(time.Second)),
+	// Start at the measured-safe pace unless the caller asked for slower. At
+	// 1 req/s the site bans after eight to ten requests and the user then
+	// waits ten minutes for nothing; the extra second per page is far cheaper.
+	d := time.Duration(delay * float64(time.Second))
+	if d < safeDelay {
+		d = safeDelay
+	}
+	c := &Crawler{DataDir: dataDir, Delay: d,
 		client: newClient(), st: Status{State: "idle"}}
 	c.queue = c.loadQueue()
 	if len(c.queue) > 0 {
@@ -193,6 +215,23 @@ func parseRobots(txt, agent string) []string {
 	return groups["*"]
 }
 
+// sleepPausable waits d, returning false if the crawler was paused meanwhile.
+// A ban wait is long enough that pausing must interrupt it.
+func (c *Crawler) sleepPausable(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if c.paused() {
+			return false
+		}
+		step := time.Second
+		if left := time.Until(deadline); left < step {
+			step = left
+		}
+		time.Sleep(step)
+	}
+	return true
+}
+
 func (c *Crawler) get(path string) ([]byte, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
@@ -232,31 +271,26 @@ func (c *Crawler) get(path string) ([]byte, error) {
 			code := resp.StatusCode
 			log.Printf("HTTP %d %s", code, path)
 			if code == 403 || code == 451 {
-				// A 403 means one of two things: the client is outside an
-				// allowed region (permanent), or a burst of requests tripped
-				// the rate limiter. The measured limit is roughly eight to ten
-				// requests before the ban lands, and the window lasts minutes,
-				// so waiting seconds does nothing — back off in minutes and
-				// slow the whole crawler down, otherwise the next page trips
-				// it again.
+				// The site throttles by request rate, not by a fixed count:
+				// measured, 1 req/s trips the ban after eight to ten requests
+				// while 2 req/s ran twenty in a row untouched. A permanent 403
+				// (out-of-region client) never clears, so the two cases are
+				// told apart by whether waiting helps.
 				refused++
-				if refused >= 4 {
+				if refused > maxBanRetries {
 					return nil, fmt.Errorf("HTTP %d %s: %w", code, path, errRefused)
 				}
 				c.client.CloseIdleConnections()
-				wait := time.Duration(60*(1<<(refused-1))) * time.Second
-				// Learned limit, kept for the rest of the run: retrying at the
-				// original pace walks straight back into the ban.
-				slow := 3 * time.Second
-				if c.Delay < slow {
-					c.Delay = slow
+				log.Printf("HTTP %d %s（被封，等待 %v 后自动重试，第 %d/%d 次）",
+					code, path, banWait, refused, maxBanRetries)
+				if !c.sleepPausable(banWait) {
+					return nil, errPaused
 				}
-				log.Printf("HTTP %d %s（限流，退避 %v，并把间隔调到 %v）", code, path, wait, c.Delay)
-				for t := time.Duration(0); t < wait; t += time.Second {
-					if c.paused() {
-						return nil, errPaused
-					}
-					time.Sleep(time.Second)
+				// Once the ban lands, crawl slowly for the rest of the run:
+				// retrying at the original pace walks straight back into it.
+				if c.Delay < safeDelay {
+					c.Delay = safeDelay
+					log.Printf("请求间隔自动调整为 %v", c.Delay)
 				}
 				continue
 			}
