@@ -1,10 +1,6 @@
-data/
 build/
-dist/
-*.spec
+.mygo/
+data/
+*.png
+!resources/*.png
 *.zip
-*.tar.gz
-*.dmg
-__pycache__/
-*.pyc
-.venv/

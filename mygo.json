@@ -1,0 +1,10 @@
+{
+  "name": "EhonShelf",
+  "identifier": "io.github.mcxen.ehonshelf",
+  "version": "0.2.0",
+  "out": "build",
+  "linux": {
+    "maintainer": "mcxen <mcxen@users.noreply.github.com>",
+    "comment": "日文研艳本资料数据库离线书架阅读器"
+  }
+}

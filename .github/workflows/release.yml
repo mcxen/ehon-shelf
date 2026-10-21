@@ -5,62 +5,81 @@ on:
 permissions:
   contents: write
 jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the version
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes "原生桌面版（Go + MyGo）。安装包见附件；sample-data.zip 为 3 部示例作品（图像版权归国際日本文化研究センター）。macOS / Windows 版未签名，首次打开见 README。"
+
   build:
+    needs: draft-release
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            asset: EhonShelf-macos-arm64.zip
-          - os: windows-latest
-            asset: EhonShelf-windows-x64.zip
-          - os: ubuntu-22.04
-            asset: EhonShelf-linux-x64.tar.gz
-    runs-on: ${{ matrix.os }}
+          - { name: macOS, os: macos-latest, platform: "darwin/universal" }
+          - { name: Windows, os: ubuntu-latest, platform: "windows/amd64" }
+          - { name: Linux, os: ubuntu-latest, platform: "linux/amd64" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: "3.12"
-      - run: pip install pyinstaller -r requirements.txt
-      - run: python scripts/build.py
-      - name: package (macOS)
-        if: runner.os == 'macOS'
+          go-version-file: go.mod
+      - name: Install NSIS, for the Windows installer
+        if: matrix.name == 'Windows'
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - run: go test ./...
+        if: matrix.name == 'Linux'
+      - run: go tool mygo build -platform "${{ matrix.platform }}"
+      - name: Collect
+        shell: bash
         run: |
-          cd dist && ditto -c -k --keepParent EhonShelf.app ../${{ matrix.asset }}
-          cd .. && hdiutil create -volname EhonShelf -srcfolder dist/EhonShelf.app -ov -format UDZO EhonShelf-macos-arm64.dmg
-      - name: package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist/EhonShelf.exe, README.md, LICENSE -DestinationPath ${{ matrix.asset }}
-      - name: package (Linux)
-        if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.asset }} -C dist EhonShelf -C .. README.md LICENSE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.os }}
-          path: |
-            EhonShelf-*.zip
-            EhonShelf-*.tar.gz
-            EhonShelf-*.dmg
-  release:
+          mkdir -p out
+          ls -R build | head -50
+          case "${{ matrix.name }}" in
+            macOS)
+              cp build/*/*.dmg out/
+              app=$(ls -d build/*/*.app | head -1)
+              ditto -c -k --keepParent "$app" "out/EhonShelf-${GITHUB_REF_NAME#v}-macos-universal.app.zip" ;;
+            Windows)
+              cp build/*/*Setup*.exe out/
+              exe=$(ls build/*/*.exe | grep -v Setup | head -1)
+              (cd "$(dirname "$exe")" && zip -j "$GITHUB_WORKSPACE/out/EhonShelf-${GITHUB_REF_NAME#v}-windows-amd64-portable.zip" "$(basename "$exe")") ;;
+            Linux)
+              cp build/*/*.tar.gz build/*/*.deb build/*/install.sh out/ ;;
+          esac
+          ls -la out
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
     needs: build
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          merge-multiple: true
-      - name: carry over sample-data.zip from an earlier release
+      - name: Carry sample-data.zip forward from an earlier release
         run: |
-          for t in $(gh release list --limit 20 --json tagName -q '.[].tagName'); do
-            if gh release download "$t" -p sample-data.zip -D out 2>/dev/null; then echo "sample from $t"; break; fi
-          done
-          ls -la out
-      - name: publish
-        run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "安装包见下方附件。sample-data.zip 为 3 部示例作品（数据版权归国際日本文化研究センター）。"
-          gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          if ! gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[].name' | grep -qx sample-data.zip; then
+            for t in $(gh release list --limit 30 --json tagName,isDraft -q '.[] | select(.isDraft|not) | .tagName'); do
+              if gh release download "$t" -p sample-data.zip -D . 2>/dev/null; then
+                echo "sample-data.zip from $t"; gh release upload "$GITHUB_REF_NAME" sample-data.zip --clobber; break
+              fi
+            done
+          fi
+      - name: Publish
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
