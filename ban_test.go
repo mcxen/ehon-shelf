@@ -44,12 +44,13 @@ func TestGetWaitsOutBanThenSucceeds(t *testing.T) {
 	})
 	defer srv.Close()
 
-	oldBase, oldWait := Base, banWait
+	oldBase, oldWait, oldPoll := Base, banWait, banPoll
 	Base = srv.URL
 	// Shrink the wait so the test does not literally sleep ten minutes; the
 	// code path (wait, retry, succeed) is what matters.
 	banWait = 200 * time.Millisecond
-	defer func() { Base, banWait = oldBase, oldWait }()
+	banPoll = time.Millisecond
+	defer func() { Base, banWait, banPoll = oldBase, oldWait, oldPoll }()
 
 	c := NewCrawler(t.TempDir(), 1)
 	body, err := c.get("/enp/Cover/List/1")
@@ -70,10 +71,11 @@ func TestGetGivesUpAfterMaxBanRetries(t *testing.T) {
 	})
 	defer srv.Close()
 
-	oldBase, oldWait := Base, banWait
+	oldBase, oldWait, oldPoll := Base, banWait, banPoll
 	Base = srv.URL
 	banWait = time.Millisecond
-	defer func() { Base, banWait = oldBase, oldWait }()
+	banPoll = time.Millisecond
+	defer func() { Base, banWait, banPoll = oldBase, oldWait, oldPoll }()
 
 	c := NewCrawler(t.TempDir(), 1)
 	if _, err := c.get("/enp/Cover/List/1"); err == nil {
@@ -93,10 +95,11 @@ func TestBanSlowsTheCrawlerForTheRestOfTheRun(t *testing.T) {
 	})
 	defer srv.Close()
 
-	oldBase, oldWait := Base, banWait
+	oldBase, oldWait, oldPoll := Base, banWait, banPoll
 	Base = srv.URL
 	banWait = time.Millisecond
-	defer func() { Base, banWait = oldBase, oldWait }()
+	banPoll = time.Millisecond
+	defer func() { Base, banWait, banPoll = oldBase, oldWait, oldPoll }()
 
 	c := NewCrawler(t.TempDir(), 1)
 	// Start below the safe pace to prove the ban raises it.
@@ -118,10 +121,11 @@ func TestBanWaitIsInterruptibleByPause(t *testing.T) {
 	})
 	defer srv.Close()
 
-	oldBase, oldWait := Base, banWait
+	oldBase, oldWait, oldPoll := Base, banWait, banPoll
 	Base = srv.URL
 	banWait = 30 * time.Second
-	defer func() { Base, banWait = oldBase, oldWait }()
+	banPoll = time.Millisecond
+	defer func() { Base, banWait, banPoll = oldBase, oldWait, oldPoll }()
 
 	c := NewCrawler(t.TempDir(), 1)
 	// Pause() only arms when a run is in flight (that is what the UI does), so

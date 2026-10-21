@@ -53,8 +53,49 @@ const (
 // constants so tests can shrink the wait instead of sleeping for real.
 var (
 	banWait       = 10 * time.Minute
-	maxBanRetries = 6
+	maxBanRetries = 12
+
+	// A ban lifts on its own, and measurement showed it lifts long before
+	// banWait is over — waiting the full window wasted most of it. Poll the
+	// site at this interval and resume as soon as it answers again.
+	banPoll = 30 * time.Second
 )
+
+// waitForUnban blocks until the site answers this path again, polling every
+// banPoll up to limit. It returns false only if the crawler was paused; a
+// site that never recovers is reported by the caller after maxBanRetries.
+func (c *Crawler) waitForUnban(path string, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		// Sleep in short slices so a pause interrupts promptly, but cap each
+		// nap at banPoll so a test's tiny banPoll does not become a 1s wait.
+		slice := min(banPoll, time.Second)
+		for waited := time.Duration(0); waited < banPoll; waited += slice {
+			if c.paused() {
+				return false
+			}
+			time.Sleep(slice)
+		}
+		c.client.CloseIdleConnections()
+		req, err := http.NewRequest("GET", Base+path, nil)
+		if err != nil {
+			continue
+		}
+		setHeaders(req)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			continue
+		}
+		code := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if code != 403 && code != 451 {
+			log.Printf("封禁已解除（探测 %s → %d），继续", path, code)
+			return true
+		}
+	}
+	return true // let the caller retry; maxBanRetries bounds the loop
+}
 
 var bibKeys = []string{"通番", "絵師名", "よみがな１", "作品名", "よみがな２", "技法", "版型", "点数", "板行年", "西暦", "作品ﾌｧｲﾙNo.", "備考", "請求記号", "図書ID"}
 
@@ -271,19 +312,20 @@ func (c *Crawler) get(path string) ([]byte, error) {
 			code := resp.StatusCode
 			log.Printf("HTTP %d %s", code, path)
 			if code == 403 || code == 451 {
-				// The site throttles by request rate, not by a fixed count:
-				// measured, 1 req/s trips the ban after eight to ten requests
-				// while 2 req/s ran twenty in a row untouched. A permanent 403
-				// (out-of-region client) never clears, so the two cases are
-				// told apart by whether waiting helps.
+				// The site throttles by request rate. A 403 here is either a
+				// rate-limit ban, which clears on its own, or an out-of-region
+				// client, which never does. Measured: the ban lifts well
+				// before banWait is over, so waiting the full window wastes
+				// most of it. Poll instead and resume the moment the site
+				// answers again.
 				refused++
 				if refused > maxBanRetries {
 					return nil, fmt.Errorf("HTTP %d %s: %w", code, path, errRefused)
 				}
 				c.client.CloseIdleConnections()
-				log.Printf("HTTP %d %s（被封，等待 %v 后自动重试，第 %d/%d 次）",
-					code, path, banWait, refused, maxBanRetries)
-				if !c.sleepPausable(banWait) {
+				log.Printf("HTTP %d %s（被封，每 %v 探测一次，最多等 %v；第 %d/%d 次）",
+					code, path, banPoll, banWait, refused, maxBanRetries)
+				if !c.waitForUnban(path, banWait) {
 					return nil, errPaused
 				}
 				// Once the ban lands, crawl slowly for the rest of the run:

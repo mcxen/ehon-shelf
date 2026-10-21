@@ -65,8 +65,14 @@ func fetchallMain() {
 	}
 	log.Printf("%d works in the catalogue", len(items))
 
+	index := make(map[int]Item, len(items))
+	for _, it := range items {
+		index[it.ID] = it
+	}
+
 	start := time.Now()
-	var done, skipped, failed int
+	var done, skipped int
+	var failedIDs []int
 	for i, it := range items {
 		if len(want) > 0 && !want[it.ID] {
 			continue
@@ -79,10 +85,10 @@ func fetchallMain() {
 
 		switch {
 		case err != nil:
-			failed++
+			failedIDs = append(failedIDs, it.ID)
 			log.Printf("[%d/%d] FAIL id=%d %q: %v", i+1, len(items), it.ID, it.Title, err)
 		case after == 0:
-			failed++
+			failedIDs = append(failedIDs, it.ID)
 			log.Printf("[%d/%d] EMPTY id=%d %q: nothing was saved", i+1, len(items), it.ID, it.Title)
 		case after == before:
 			skipped++
@@ -95,9 +101,36 @@ func fetchallMain() {
 		}
 	}
 
-	log.Printf("done: %d downloaded, %d already present, %d failed in %v",
-		done, skipped, failed, time.Since(start).Round(time.Second))
-	if failed > 0 {
+	// A work that gave up under load usually succeeds on a quieter second
+	// pass: the failures are scattered bans, not broken records. Retry them
+	// before declaring the run incomplete.
+	if len(failedIDs) > 0 {
+		log.Printf("--- retrying %d failed works ---", len(failedIDs))
+		var stillFailing []int
+		for n, id := range failedIDs {
+			it, ok := index[id]
+			if !ok {
+				continue
+			}
+			dir := filepath.Join(dst, strconv.Itoa(id))
+			before := dirSize(dir)
+			err := c.crawlItem(it)
+			after := dirSize(dir)
+			if err != nil || after <= before {
+				stillFailing = append(stillFailing, id)
+				log.Printf("[retry %d/%d] FAIL id=%d %q: %v", n+1, len(failedIDs), id, it.Title, err)
+			} else {
+				done++
+				log.Printf("[retry %d/%d] ok   id=%d %q %.1f MB", n+1, len(failedIDs), id, it.Title, float64(after-before)/1e6)
+			}
+		}
+		failedIDs = stillFailing
+	}
+
+	log.Printf("done: %d downloaded, %d already present, %d still failing in %v",
+		done, skipped, len(failedIDs), time.Since(start).Round(time.Second))
+	if len(failedIDs) > 0 {
+		log.Printf("failed ids: %v", failedIDs)
 		os.Exit(1)
 	}
 	_ = fmt.Sprint()
