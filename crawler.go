@@ -111,8 +111,11 @@ func probeOK(path string) bool {
 var bibKeys = []string{"通番", "絵師名", "よみがな１", "作品名", "よみがな２", "技法", "版型", "点数", "板行年", "西暦", "作品ﾌｧｲﾙNo.", "備考", "請求記号", "図書ID"}
 
 var (
-	errPaused  = errors.New("paused")
-	errRefused = errors.New("服务器拒绝访问：该站点限制了部分地区，请在设置里填写可用的代理（例如 http://127.0.0.1:7897）后重试")
+	errPaused = errors.New("paused")
+	// errServerDown is the site answering 5xx: its own backend is down, and
+	// no amount of retrying here changes that.
+	errServerDown = errors.New("站点服务器故障（5xx），不是本机或代理的问题，请稍后再试")
+	errRefused    = errors.New("服务器拒绝访问：该站点限制了部分地区，请在设置里填写可用的代理（例如 http://127.0.0.1:7897）后重试")
 )
 
 // Status is a snapshot of the crawler, shown by the settings view.
@@ -322,6 +325,14 @@ func (c *Crawler) get(path string) ([]byte, error) {
 			}
 			code := resp.StatusCode
 			log.Printf("HTTP %d %s", code, path)
+			if code >= 500 {
+				// A 5xx is the site's own backend failing (its Azure gateway
+				// returns 502 when the app behind it is down), not anything we
+				// can fix by retrying harder. Whole runs have burned hours
+				// against a down server: report it so a caller stops instead of
+				// grinding through the catalogue.
+				return nil, fmt.Errorf("HTTP %d %s: %w", code, path, errServerDown)
+			}
 			if code == 403 || code == 451 {
 				// The site throttles by request rate. A 403 here is either a
 				// rate-limit ban, which clears on its own, or an out-of-region

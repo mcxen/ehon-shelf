@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -71,7 +72,7 @@ func fetchallMain() {
 	}
 
 	start := time.Now()
-	var done, skipped int
+	var done, skipped, downStreak int
 	var failedIDs []int
 	for i, it := range items {
 		if len(want) > 0 && !want[it.ID] {
@@ -82,6 +83,19 @@ func fetchallMain() {
 
 		err := c.crawlItem(it)
 		after := dirSize(dir)
+
+		if errors.Is(err, errServerDown) {
+			// The site is down as a whole. Every remaining work would fail the
+			// same way, so stop instead of grinding through the catalogue for
+			// hours: the run resumes where it left off when the site is back.
+			downStreak++
+			if downStreak >= 3 {
+				log.Printf("连续 %d 次 5xx，站点已宕机，停止。已下的作品都在 %s，稍后重跑会跳过它们。", downStreak, dst)
+				break
+			}
+		} else {
+			downStreak = 0
+		}
 
 		switch {
 		case err != nil:
