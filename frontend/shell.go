@@ -29,23 +29,25 @@ func (a *App) OnSelect(fn func(id string)) { a.onSelect = fn }
 func (a *App) View(c *ui.Context, body func(*ui.Context)) {
 	pal := paletteFor(c)
 	c.SetTheme(a.theme(c, pal))
+	bar := c.TitleBar()
 
 	row := ui.Row(c).Fill().AlignItems(ui.Stretch)
 	backdrop(c, pal, row, a.set)
 	row.Children(func() {
 		ui.Column(c).Width(a.set.SidebarWidth).Shrink(0).Children(func() {
-			a.sidebar(c, pal)
+			a.sidebar(c, pal, bar)
 		})
-		main := ui.Column(c).Grow(1).MinWidth(0).Padding(cardGap, cardGap, cardGap, cardGap).DragWindow()
+		// The card meets the sidebar. The 8 DIP gap is only the top, right and bottom.
+		main := ui.Column(c).Grow(1).MinWidth(0).Padding(cardGap, cardGap, cardGap, 0).DragWindow()
 		main.Children(func() {
 			a.card(c, pal, body)
 		})
 	})
 }
 
-func (a *App) sidebar(c *ui.Context, pal *palette) {
-	ui.Row(c).Height(topBar).Shrink(0).AlignItems(ui.Center).Padding(0, 12, 0, 12).DragWindow().Children(func() {
-		ui.Text(c, "艳本资料书架").FontSize(13).FontWeight(600).TextColor(pal.text)
+func (a *App) sidebar(c *ui.Context, pal *palette, bar ui.TitleBar) {
+	ui.Row(c).Height(topBar).Shrink(0).AlignItems(ui.Center).Padding(0, 12, 0, lead(bar)).DragWindow().Children(func() {
+		ui.Text(c, "艳本资料书架").FontSize(13).FontWeight(600).TextColor(pal.text).SingleLine()
 	})
 	ui.Scroll(c.Key("sections")).Grow(1).Padding(0, 10, 16, 10).Children(func() {
 		ui.Column(c).Gap(2).Children(func() {
@@ -62,18 +64,24 @@ func (a *App) sidebarRow(c *ui.Context, pal *palette, s Section) {
 	if sel {
 		bg = pal.rowSelected
 	}
-	row := ui.Row(c.Key(s.ID)).Height(rowH).Shrink(0).Radius(7).Padding(0, 9, 0, 9).
-		AlignItems(ui.Center).Gap(9).Background(bg).Cursor(ui.CursorPointer)
+	row := ui.Row(c.Key(s.ID)).Height(rowH).Shrink(0).Radius(8).Padding(0, 10).
+		AlignItems(ui.Center).Gap(10).Background(bg).Cursor(ui.CursorPointer)
+	if sel {
+		chosen(row, pal)
+	}
 	if !sel && row.Hovered() {
 		row.Background(pal.rowHover)
 	}
 	row.Children(func() {
 		if g := glyph(s.Icon); g != nil {
-			ui.Icon(c, g).Size(15, 15).TextColor(pal.textMuted)
+			ic := ui.Icon(c, g).Size(15, 15).TextColor(pal.textMuted)
+			if sel {
+				ic.TextColor(pal.accent)
+			}
 		}
 		ui.Text(c, s.Title).FontSize(13).TextColor(pal.text).SingleLine().Shrink(1)
 	})
-	if row.Clicked() {
+	if (row.Pressed() || row.Clicked()) && !sel {
 		a.current = s.ID
 		if a.onSelect != nil {
 			a.onSelect(s.ID)
@@ -90,10 +98,14 @@ func (a *App) card(c *ui.Context, pal *palette, body func(*ui.Context)) {
 				title = s.Title
 			}
 		}
-		ui.Row(c).Height(headerH).Shrink(0).AlignItems(ui.Center).Padding(0, 16, 0, 16).DragWindow().Children(func() {
-			ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(pal.text)
+		ui.Row(c).Height(headerH).Shrink(0).AlignItems(ui.Center).Padding(0, 12, 0, 20).DragWindow().Children(func() {
+			ui.Text(c, title).FontSize(15).FontWeight(650).TextColor(pal.text)
+			ui.Spacer(c)
+			WindowButtons(c, a.win)
 		})
-		ui.Scroll(c.Key("body")).Grow(1).MinHeight(0).Padding(6, 18, 20, 18).Children(func() {
+		// The body scrolls itself. A grid or a list inside another scroll
+		// never gets a height, so the shelf could not fill the card.
+		ui.Column(c).Grow(1).MinHeight(0).Padding(4, 16, 16, 16).Children(func() {
 			body(c)
 		})
 	})

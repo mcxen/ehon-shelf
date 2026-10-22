@@ -77,6 +77,35 @@ func iconButton(c *ui.Context, key string, svg *ui.SVG, label string, pal *palet
 	}
 }
 
+// Frame hides the title bar and keeps the system's resize edges, shadow and
+// corners. Frameless would drop them; the view does not draw a window frame.
+func Frame(o mygo.WindowOptions) mygo.WindowOptions { return framed(o) }
+
+// ContentLead is the left inset that clears the traffic lights.
+func ContentLead(bar ui.TitleBar) float32 { return lead(bar) }
+
+// BarHeight is the top bar, centered on the traffic lights.
+func BarHeight() float32 { return topBar }
+
+// WindowButtons draws minimize, maximize and close where the system buttons
+// are hidden. On macOS it draws nothing.
+func WindowButtons(c *ui.Context, w *mygo.Window) {
+	windowControls(c, paletteFor(c), w, func(k string) string {
+		switch k {
+		case "window.minimize":
+			return "最小化"
+		case "window.maximize":
+			return "最大化"
+		case "window.restore":
+			return "还原"
+		case "window.close":
+			return "关闭"
+		default:
+			return k
+		}
+	})
+}
+
 func framed(o mygo.WindowOptions) mygo.WindowOptions {
 	if ownControls {
 		o.TitleBarStyle = mygo.TitleBarHidden

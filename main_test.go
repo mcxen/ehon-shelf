@@ -102,13 +102,22 @@ func TestShelfReaderSettings(t *testing.T) {
 	// Back to the shelf: the reader's own button is gone, Esc closes it.
 	tt.Key(0, ui.KeyEscape)
 
-	// Settings, with the cached remote catalog. The sidebar owns the entry
-	// now, so call what its click handler calls.
+	// Settings holds the library options. The catalog lives on its own page,
+	// opened from the sidebar, and the click loads the cached catalog.
 	a.openSettings()
 	tt.Frame()
-	for _, s := range []string{"数据文件夹", "下载示例数据", "远程目录", "秋の寝覚", "共 2 部，已下载 1 部，已选 0 部"} {
+	for _, s := range []string{"数据文件夹", "下载示例数据", "远程目录"} {
 		if !tt.HasText(s) {
 			t.Errorf("settings lacks %q: %q", s, tt.Texts())
+		}
+	}
+	if err := tt.Click("远程目录"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, s := range []string{"秋の寝覚", "共 2 部，已下载 1 部，已选 0 部"} {
+		if !tt.HasText(s) {
+			t.Errorf("remote lacks %q: %q", s, tt.Texts())
 		}
 	}
 	if err := tt.Click("全选"); err != nil {

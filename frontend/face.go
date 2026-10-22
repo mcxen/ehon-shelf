@@ -8,6 +8,8 @@
 package ehonui
 
 import (
+	"github.com/egoist/mygo"
+
 	"github.com/mcxen/ehon-shelf/backend/settings"
 )
 
@@ -18,6 +20,7 @@ type App struct {
 	sections []Section
 	current  string
 	onSelect func(id string)
+	win      *mygo.Window
 
 	// ToggleSidebar is wired by main if it wants a shortcut for it.
 	ToggleSidebar func()
@@ -30,6 +33,9 @@ func New(s settings.Settings) *App { return &App{set: s} }
 
 // SetSettings replaces the settings the theme and font code read.
 func (a *App) SetSettings(s settings.Settings) { a.set = s }
+
+// SetWindow is the window whose buttons the card header draws on Windows and Linux.
+func (a *App) SetWindow(w *mygo.Window) { a.win = w }
 
 // Settings returns the current settings.
 func (a *App) Settings() settings.Settings { return a.set }

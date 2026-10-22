@@ -66,14 +66,32 @@ func button(c *ui.Context, key, label, keys string, primary bool, pal *palette) 
 	return b.Clicked()
 }
 
+// ReaderTheme is the full-window reader's theme: the shell's font, on the
+// dark sidebar wash, so the page well and the window buttons are one surface.
+func (a *App) ReaderTheme(c *ui.Context) *ui.Theme {
+	t := a.theme(c, &darkPalette)
+	t.Dark = true
+	t.Background = darkPalette.sidebar
+	return t
+}
+
 func (a *App) theme(c *ui.Context, pal *palette) *ui.Theme {
+	loadFonts()
 	t := *c.Theme()
 	t.Accent = pal.accent
 	t.Selection = pal.accent.Alpha(0.25)
-	t.Border = ui.Transparent
+	// Stock fields and buttons take this border. A transparent one, which
+	// the GodGo shell uses for its own shadowed controls, left them white
+	// on the white card.
+	t.Border = pal.text.Alpha(0.16)
 	t.Surface = pal.control
 	t.SurfaceHover = pal.controlHover
 	t.SurfacePressed = pal.controlHover.Mix(pal.text, 0.06)
+	if !pal.dark {
+		t.Surface = ui.Hex("#f4f4f6")
+		t.SurfaceHover = ui.Hex("#e7e7ed")
+		t.SurfacePressed = ui.Hex("#dcdce4")
+	}
 	t.Text = pal.text
 	t.TextMuted = pal.textMuted
 	if fam := a.fontFamily(); fam != "" {

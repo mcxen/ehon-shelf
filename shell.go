@@ -3,8 +3,6 @@ package main
 
 import (
 	ehonui "github.com/mcxen/ehon-shelf/frontend"
-
-	"github.com/egoist/mygo/ui"
 )
 
 // The four views the app has are the four sidebar rows. The reader stays a
@@ -32,6 +30,8 @@ func sectionFor(v int) string {
 		return secSettings
 	case viewLogs:
 		return secLogs
+	case viewRemote:
+		return secRemote
 	default:
 		return secShelf
 	}
@@ -44,13 +44,9 @@ func viewFor(sec string) int {
 		return viewSettings
 	case secLogs:
 		return viewLogs
+	case secRemote:
+		return viewRemote
 	default:
 		return viewShelf
 	}
 }
-
-var (
-	_ = secRemote
-	_ = ehonui.Section{}
-	_ = ui.Context{}
-)

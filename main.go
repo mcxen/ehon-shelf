@@ -30,6 +30,7 @@ const (
 	viewReader
 	viewSettings
 	viewLogs
+	viewRemote
 )
 
 type app struct {
@@ -209,13 +210,20 @@ func (a *app) viewRoot(c *ui.Context) {
 	a.shell.SetSettings(a.shellSettings())
 	a.shell.SetSections(a.sections())
 	a.shell.SetSection(sectionFor(a.view))
-	a.shell.OnSelect(func(sec string) { a.view = viewFor(sec) })
+	a.shell.OnSelect(func(sec string) {
+		a.view = viewFor(sec)
+		if sec == secRemote && len(a.remote) == 0 && !a.remoteLoading {
+			a.loadRemote(false)
+		}
+	})
 	a.shell.View(c, func(body *ui.Context) {
 		switch a.view {
 		case viewSettings:
 			a.settingsBody(body)
 		case viewLogs:
 			a.logsBody(body)
+		case viewRemote:
+			a.remoteBody(body)
 		default:
 			a.shelfBody(body)
 		}
@@ -224,8 +232,50 @@ func (a *app) viewRoot(c *ui.Context) {
 
 func (a *app) shelfBody(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Gap(12).Padding(10, 0, 6, 0).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "书架").FontSize(17).Bold()
+	ui.Column(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
+		a.shelfToolbar(c, t)
+		if len(a.books) == 0 {
+			a.shelfEmpty(c, t)
+			return
+		}
+		ui.GridView(c, &a.grid, len(a.filtered), 176, 286, func(i int) {
+			b := &a.books[a.filtered[i]]
+			card := ui.Column(c.Key(b.ID)).Grow(1).Gap(6).Padding(8).Radius(12).AlignItems(ui.Center)
+			card.Children(func() {
+				ui.Box(c).Height(210).FillWidth().Center().Children(func() {
+					if bmp := a.covers[b.ID]; bmp != nil {
+						img := ui.Image(c, bmp).Fit(ui.Contain).MaxWidth(156).MaxHeight(210).Radius(4).
+							Shadow(0, 8, 18, 0, ui.RGBA(0, 0, 0, 0.28))
+						if !b.Complete {
+							img.Opacity(0.45)
+						}
+					} else {
+						ui.Box(c).Size(140, 200).Background(t.Surface).Radius(4)
+					}
+				})
+				ui.Text(c, b.Title).FontSize(13).MaxLines(2).TextAlign(ui.Center)
+				info := b.Artist
+				if b.Date != "" {
+					info += " · " + b.Date
+				}
+				info += fmt.Sprintf(" · %d 图", b.PageCount)
+				if !b.Complete {
+					info += " · 未完成"
+				}
+				ui.Text(c, info).FontSize(11).TextColor(t.TextMuted).MaxLines(2).TextAlign(ui.Center)
+			})
+			if card.Hovered() {
+				card.Background(t.SurfaceHover)
+			}
+			if card.Clicked() {
+				a.openBook(b)
+			}
+		}).Grow(1).Gap(10).Padding(4, 0, 0, 0)
+	})
+}
+
+func (a *app) shelfToolbar(c *ui.Context, t *ui.Theme) {
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Shrink(0).Children(func() {
 		if ui.SearchField(c, &a.query).Label("搜索书名 / 绘师").Placeholder("搜索书名 / 绘师").Width(260).Changed() {
 			a.filter()
 		}
@@ -235,63 +285,24 @@ func (a *app) shelfBody(c *ui.Context) {
 			}
 		}
 		ui.Textf(c, "共 %d 部", len(a.filtered)).TextColor(t.TextMuted)
-		ui.Spacer(c)
 	})
-	ui.Divider(c)
-	if len(a.books) == 0 {
-		ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
-			if a.scanning {
-				ui.Text(c, "正在读取书库…").TextColor(t.TextMuted)
-				return
-			}
-			ui.Text(c, "书架还是空的").FontSize(18)
-			ui.Text(c, "请在「设置」中下载示例数据，或从远程目录选择作品下载。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "打开设置").Clicked() {
-				a.openSettings()
-			}
-		})
-		return
-	}
-	ui.GridView(c, &a.grid, len(a.filtered), 170, 290, func(i int) {
-		b := &a.books[a.filtered[i]]
-		card := ui.Column(c.Key(b.ID)).Grow(1).Gap(4).Padding(6).Radius(8).AlignItems(ui.Center)
-		card.Children(func() {
-			ui.Box(c).Height(210).FillWidth().Center().Children(func() {
-				if bmp := a.covers[b.ID]; bmp != nil {
-					img := ui.Image(c, bmp).Fit(ui.Contain).MaxWidth(160).MaxHeight(210).Radius(3).Shadow(2, 3, 8, 0, ui.RGBA(0, 0, 0, 120))
-					if !b.Complete {
-						img.Opacity(0.45)
-					}
-				} else {
-					ui.Box(c).Size(140, 200).Background(t.Surface).Radius(3)
-				}
-			})
-			ui.Text(c, b.Title).FontSize(13).MaxLines(2).TextAlign(ui.Center)
-			info := b.Artist
-			if b.Date != "" {
-				info += " · " + b.Date
-			}
-			info += fmt.Sprintf(" · %d 图", b.PageCount)
-			if !b.Complete {
-				info += " · 未完成"
-			}
-			ui.Text(c, info).FontSize(11).TextColor(t.TextMuted).MaxLines(2).TextAlign(ui.Center)
-		})
-		if card.Hovered() {
-			card.Background(t.SurfaceHover)
-		}
-		if card.Clicked() {
-			a.openBook(b)
-		}
-	}).Grow(1).Gap(12).Padding(16)
 }
 
-func (a *app) openSettings() {
-	a.view = viewSettings
-	if len(a.remote) == 0 && !a.remoteLoading {
-		a.loadRemote(false)
-	}
+func (a *app) shelfEmpty(c *ui.Context, t *ui.Theme) {
+	ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
+		if a.scanning {
+			ui.Text(c, "正在读取书库…").TextColor(t.TextMuted)
+			return
+		}
+		ui.Text(c, "书架还是空的").FontSize(18)
+		ui.Text(c, "请在「设置」中下载示例数据，或从「远程目录」选择作品下载。").TextColor(t.TextMuted)
+		if ui.PrimaryButton(c, "打开设置").Clicked() {
+			a.openSettings()
+		}
+	})
 }
+
+func (a *app) openSettings() { a.view = viewSettings }
 
 // --- reader ---
 
@@ -391,7 +402,6 @@ func (a *app) ensurePages() {
 }
 
 func (a *app) readerView(c *ui.Context) {
-	t := c.Theme()
 	if c.Shortcut(0, ui.KeyLeft) {
 		a.left()
 	}
@@ -408,107 +418,208 @@ func (a *app) readerView(c *ui.Context) {
 		a.view = viewShelf
 		return
 	}
+	c.SetTheme(a.shell.ReaderTheme(c))
 	a.ensurePages()
 	n := len(a.book.Pages)
-	ui.Row(c).Gap(8).Padding(8, 12).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "返回书架").Clicked() {
-			a.view = viewShelf
-		}
-		ui.Text(c, a.book.Title+"　"+a.book.Artist).Bold().SingleLine().Grow(1).Shrink(1)
-		dir := "阅读方向：左至右"
-		if a.rtl {
-			dir = "阅读方向：右至左"
-		}
-		if ui.Button(c, dir).Clicked() {
-			a.rtl = !a.rtl
-			a.conf.RTL = &a.rtl
-			_ = a.conf.Save()
-		}
-		mode := "单页模式"
-		if a.spread {
-			mode = "双页模式"
-		}
-		if ui.Button(c, mode).Clicked() {
-			a.spread = !a.spread
-			a.conf.Spread = a.spread
-			_ = a.conf.Save()
-		}
-		if ui.Button(c, "缩小").Clicked() {
-			a.zoom = max(1, a.zoom-0.5)
-		}
-		if ui.Button(c, "放大").Clicked() {
-			a.zoom = min(a.zoom+0.5, 6)
-		}
-		if ui.Button(c, "适应窗口").Clicked() {
-			a.zoom = 1
-		}
-		label := fmt.Sprintf("第 %d / %d 图", a.pos+1, n)
-		if v := a.visible(); len(v) == 2 {
-			label = fmt.Sprintf("第 %d-%d / %d 图", a.pos+1, a.pos+2, n)
-		}
-		ui.Text(c, label)
-		if ui.NumberInput(c, &a.jump, 1, float64(max(n, 1)), 1).Label("页码").Width(110).Submitted() {
-			a.pos = int(a.jump) - 1
-			a.clampPos()
-		}
-	})
-	// The page area gets its own box so MyGo lays the pages out against the
-	// real area. c.Size() is the whole window's content size, which includes
-	// the toolbar and the pager above, so sizing pages from it made them too
-	// tall and clipped the bottom of every scan.
-	ui.Row(c).Grow(1).Basis(0).MinHeight(0).Clip().AlignItems(ui.Stretch).Background(ui.RGB(17, 17, 17)).Children(func() {
-		if ui.Button(c, "‹").Width(40).Label("左翻页").Clicked() {
-			a.left()
-		}
-		ui.Box(c).Grow(1).MinWidth(0).Clip().Children(func() {
-			// Scrolling vertically keeps the pages as tall as zoom asks for.
-			// Nesting them in a Grow+Basis(0) row squeezed them back to the
-			// viewport every time, which is why zoom never appeared to work.
-			ui.Scroll(c).Children(func() {
-				ui.Row(c).Gap(2).Justify(ui.Center).Padding(6).Children(func() {
-					a.pageImages(c, a.zoom)
+	stageColor := ui.Hex("#141418")
+	ui.Column(c).Fill().Background(stageColor).Children(func() {
+		// The title bar is hidden. This row is as tall as the traffic lights
+		// and starts after them, so the controls are not covered.
+		ui.Row(c).Height(ehonui.BarHeight()).Shrink(0).Gap(4).AlignItems(ui.Center).
+			Padding(0, 12, 0, ehonui.ContentLead(c.TitleBar())).DragWindow().Children(func() {
+			if ui.Button(c, "返回书架").Clicked() {
+				a.view = viewShelf
+			}
+			ui.Text(c, a.book.Title+"　"+a.book.Artist).Bold().SingleLine().Ellipsis("…").Shrink(1).MinWidth(48)
+			ui.Spacer(c).Grow(1)
+			dir := "阅读方向：左至右"
+			if a.rtl {
+				dir = "阅读方向：右至左"
+			}
+			if ui.Button(c, dir).Clicked() {
+				a.rtl = !a.rtl
+				a.conf.RTL = &a.rtl
+				_ = a.conf.Save()
+			}
+			mode := "单页模式"
+			if a.spread {
+				mode = "双页模式"
+			}
+			if ui.Button(c, mode).Clicked() {
+				a.spread = !a.spread
+				a.conf.Spread = a.spread
+				_ = a.conf.Save()
+			}
+			if ui.Button(c, "缩小").Clicked() {
+				a.zoom = max(1, a.zoom-0.5)
+			}
+			if ui.Button(c, "放大").Clicked() {
+				a.zoom = min(a.zoom+0.5, 6)
+			}
+			if ui.Button(c, "适应窗口").Clicked() {
+				a.zoom = 1
+			}
+			label := fmt.Sprintf("第 %d / %d 图", a.pos+1, n)
+			if v := a.visible(); len(v) == 2 {
+				label = fmt.Sprintf("第 %d-%d / %d 图", a.pos+1, a.pos+2, n)
+			}
+			ui.Text(c, label).SingleLine()
+			if ui.NumberInput(c, &a.jump, 1, float64(max(n, 1)), 1).Label("页码").Width(76).Submitted() {
+				a.pos = int(a.jump) - 1
+				a.clampPos()
+			}
+			ehonui.WindowButtons(c, a.win)
+		})
+		// Pages fill this well. The edge pads sit on top of it, so they take
+		// clicks without taking any of the page's width. The wheel is taken
+		// here, over the whole well: the scroll underneath only pans once
+		// the page is larger than the well.
+		stage := ui.Box(c.Key("stage")).Grow(1).MinHeight(0).Clip()
+		stage.HandleInput(func(ev ui.InputEvent) bool { return a.readerWheel(ev) })
+		stage.Children(func() {
+			h := stage.Bounds().H
+			w := stage.Bounds().W
+			if h < 80 || w < 80 {
+				ww, wh := c.Size()
+				if h < 80 {
+					h = wh - ehonui.BarHeight()
+				}
+				if w < 80 {
+					w = ww
+				}
+			}
+			const inset = float32(20)
+			ui.ScrollBoth(c.Key("pages")).Grow(1).MinHeight(0).Children(func() {
+				// MinWidth and MinHeight keep a fitted page centered in
+				// the well. A scroll that pans both ways lays its content
+				// out in infinite room, so a percentage or a Grow would
+				// not see the well.
+				row := ui.Row(c.Key("page-row")).MinWidth(w).MinHeight(h).Gap(12).
+					Justify(ui.Center).AlignItems(ui.Center).Padding(inset)
+				if row.DoubleClicked() {
+					a.toggleZoom()
+				}
+				row.Children(func() {
+					a.pageImages(c, a.zoom, max(w-2*inset, 1), max(h-2*inset, 1))
 				})
 			})
+			a.turnPad(c, true)
+			a.turnPad(c, false)
 		})
-		if ui.Button(c, "›").Width(40).Label("右翻页").Clicked() {
-			a.right()
-		}
 	})
-	_ = t
 }
 
-// pageImages draws the visible pages. zoom scales the page height against the
-// height MyGo gives the page area: at zoom 1 an image is as tall as the area
-// and as wide as its aspect ratio allows, so nothing is stretched or clipped;
-// above 1 it grows past the area and the surrounding Scroll lets the reader
-// pan. Height is never taken from c.Size(), which includes the toolbar.
-func (a *app) pageImages(c *ui.Context, zoom float64) {
-	z := float32(max(1, zoom))
-	for _, i := range a.visible() {
+// readerWheel turns a page from the wheel while the scan fits the window.
+// Past that, the scroll keeps the wheel and the reader pans.
+func (a *app) readerWheel(ev ui.InputEvent) bool {
+	if ev.Kind != ui.InputScroll || a.zoom > 1 {
+		return false
+	}
+	if ev.DY > 0 {
+		a.forward()
+		return true
+	}
+	if ev.DY < 0 {
+		a.back()
+		return true
+	}
+	return false
+}
+
+func (a *app) toggleZoom() {
+	if a.zoom <= 1 {
+		a.zoom = 2
+		return
+	}
+	a.zoom = 1
+}
+
+// turnPad is an edge of the page well. It is out of the layout, so the scan
+// stays as wide as the well; the chevron only brightens under the pointer.
+func (a *app) turnPad(c *ui.Context, left bool) {
+	key, label, glyph := "turn-right", "右翻页", "›"
+	if left {
+		key, label, glyph = "turn-left", "左翻页", "‹"
+	}
+	pad := ui.Column(c.Key(key)).Absolute().Top(0).Bottom(0).Width(88).Center().
+		Label(label).Cursor(ui.CursorPointer)
+	if left {
+		pad.Left(0)
+	} else {
+		pad.Right(0)
+	}
+	if pad.Hovered() {
+		pad.Background(ui.RGBA(255, 255, 255, 0.06))
+	}
+	pad.HandleInput(func(ev ui.InputEvent) bool { return a.readerWheel(ev) })
+	pad.Children(func() {
+		col := ui.RGBA(255, 255, 255, 0.35)
+		if pad.Hovered() {
+			col = ui.Hex("#ffffff")
+		}
+		ui.Text(c, glyph).FontSize(32).FontWeight(500).TextColor(col)
+	})
+	if pad.Clicked() {
+		if left {
+			a.left()
+		} else {
+			a.right()
+		}
+	}
+}
+
+// pageImages draws the visible pages inside the well. areaW and areaH are
+// that well inside its inset (the window size only until the well's own
+// box exists). At zoom 1 the pages keep their aspect and take the tighter
+// of the well's width and height, gap included, so a wide scan stays on
+// screen. Above 1 that fitted size grows and the scroll pans. The size is
+// not a percentage: the scroll lays its content out in infinite room, and
+// a percentage there does not resolve.
+func (a *app) pageImages(c *ui.Context, zoom float64, areaW, areaH float32) {
+	const gap = float32(12) // the page row's Gap
+	z := float32(max(zoom, 1))
+	ids := a.visible()
+	aspects := make([]float32, len(ids))
+	var sum float32
+	for n, i := range ids {
 		bmp := a.pages[i]
 		if bmp == nil {
-			ui.Text(c.Key(i), "加载中…").TextColor(ui.RGB(150, 150, 150)).AlignSelf(ui.Center)
 			continue
 		}
 		bw, bh := bmp.Size()
 		if bw <= 0 || bh <= 0 {
-			ui.Image(c.Key(i), bmp).Fit(ui.Contain).Grow(1)
 			continue
 		}
-		// Height comes from the layout, not from a number we guess: Grow fills
-		// the page area, and AspectRatio derives the width from it, so the scan
-		// is never stretched. Zoom scales the height past the viewport, which
-		// the surrounding Scroll then lets the reader pan.
-		img := ui.Image(c.Key(i), bmp).
-			Fit(ui.Contain).
-			AspectRatio(float32(bw) / float32(bh)).
-			Grow(1).
-			MinWidth(0)
-		if z > 1 {
-			// A percentage height above the area is what lets zoom escape the
-			// viewport; at zoom 1 Grow alone already fits it.
-			img.HeightPercent(100 * z)
+		aspects[n] = float32(bw) / float32(bh)
+		sum += aspects[n]
+	}
+	fitH := areaH
+	if sum > 0 {
+		budget := areaW
+		if len(ids) > 1 {
+			budget -= gap * float32(len(ids)-1)
 		}
+		if budget < 1 {
+			budget = 1
+		}
+		fitH = min(areaH, budget/sum)
+	}
+	h := max(fitH*z, 1)
+	for n, i := range ids {
+		bmp := a.pages[i]
+		if bmp == nil {
+			ui.Text(c.Key(i), "加载中…").TextColor(ui.RGB(180, 180, 186)).AlignSelf(ui.Center)
+			continue
+		}
+		if aspects[n] == 0 {
+			ui.Image(c.Key(i), bmp).Fit(ui.Contain).Height(h)
+			continue
+		}
+		ui.Image(c.Key(i), bmp).
+			Fit(ui.Contain).
+			Height(h).
+			Width(h*aspects[n]).
+			Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.5))
 	}
 }
 
@@ -596,25 +707,24 @@ func (a *app) logsBody(c *ui.Context) {
 	muted := t.TextMuted
 	entries, _ := a.logs.Snapshot()
 
-	ui.Row(c).Gap(12).Padding(8, 0, 6, 0).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "运行日志").FontSize(20).Bold()
-		ui.Textf(c, "%d 条", len(entries)).TextColor(muted)
-		ui.Spacer(c)
-		if ui.Button(c, "清空").Clicked() {
-			a.logs.Clear()
-		}
-		if ui.Button(c, "复制全部").Clicked() {
-			a.copyLogs(c, entries)
-		}
-	})
-	ui.Divider(c)
-
-	ui.Column(c).Grow(1).Padding(4, 16, 12, 16).Children(func() {
+	ui.Column(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Shrink(0).Children(func() {
+			ui.Textf(c, "%d 条", len(entries)).TextColor(muted)
+			ui.Spacer(c)
+			if ui.Button(c, "清空").Clicked() {
+				a.logs.Clear()
+			}
+			if ui.Button(c, "复制全部").Clicked() {
+				a.copyLogs(c, entries)
+			}
+		})
 		if len(entries) == 0 {
-			ui.Text(c, "还没有日志。下载时会在这里显示进度与 HTTP 状态。").TextColor(muted)
+			ui.Column(c).Grow(1).Center().Children(func() {
+				ui.Text(c, "还没有日志。下载时会在这里显示进度与 HTTP 状态。").TextColor(muted)
+			})
 			return
 		}
-		ui.ScrollBoth(c).Grow(1).Children(func() {
+		ui.ScrollBoth(c.Key("log-lines")).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				for _, e := range entries {
 					ui.Textf(c, "%s  %s", e.When.Format("15:04:05"), e.Line).
@@ -654,99 +764,11 @@ func (a *app) copyLogs(c *ui.Context, entries []logEntry) {
 	c.WriteClipboard(b.String())
 }
 
-func (a *app) settingsBody(c *ui.Context) {
+func (a *app) remoteBody(c *ui.Context) {
 	t := c.Theme()
 	muted := t.TextMuted
-	section := func(s string) { ui.Text(c, s).FontSize(15).Bold().Margin(12, 0, 4, 0) }
-	ui.Column(c).Grow(1).Padding(4, 20, 16, 20).Gap(6).Children(func() {
-		section("基本设置")
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "数据文件夹")
-			ui.Text(c, a.conf.DataDir).TextColor(muted).SingleLine().Shrink(1)
-			if ui.Button(c, "选择文件夹…").Clicked() {
-				a.pickFolder()
-			}
-		})
-		// The site geoblocks whole regions: from a blocked IP every request
-		// returns 403 no matter how often it is retried, so the proxy is the
-		// one setting a user cannot do without. It goes first, with the same
-		// explicit text label the other rows use — ui.SearchField's own Label
-		// is not drawn, which made the proxy box look like a stray search box
-		// and left people unable to find it.
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, proxyLabel)
-			ui.SearchField(c, &a.proxy).Placeholder("http://127.0.0.1:7897").Width(260)
-			ui.Text(c, "填好后点下面的「保存」").TextColor(muted)
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "请求间隔（秒，最小 1）")
-			ui.NumberInput(c, &a.delay, MinDelay, 30, 0.1).Label("请求间隔").Width(130)
-			if ui.Button(c, "保存").Clicked() {
-				// Proxy and delay are both written on save; stopping a running
-				// download to change the proxy would lose the queue.
-				a.conf.Delay = max(MinDelay, a.delay)
-				a.conf.Proxy = strings.TrimSpace(a.proxy)
-				a.delay = a.conf.Delay
-				HttpProxy = a.conf.Proxy
-				_ = a.conf.Save()
-				if !a.cr.Running() {
-					a.newCrawler()
-				}
-				a.confMsg = "已保存"
-			}
-			ui.Text(c, a.confMsg).TextColor(muted)
-		})
-		section("示例数据")
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "下载示例数据").Disabled(a.sampleBusy).Clicked() {
-				a.downloadSample()
-			}
-			msg := a.sampleMsg
-			if msg == "" {
-				msg = "从 GitHub 最新发布版下载 3 部示例作品（约 190 MB）"
-			}
-			ui.Text(c, msg).TextColor(muted)
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "导入本地数据包…").Disabled(a.sampleBusy).Clicked() {
-				a.importLocal()
-			}
-			ui.Text(c, "选择用户脚本导出的 ehonshelf-*.zip（可多选），已有文件不会被覆盖").TextColor(muted)
-		})
-		section("下载进度")
-		s := a.status
-		line := stateNames[s.State]
-		if s.Current != nil {
-			line += fmt.Sprintf("：%d %s", s.Current.ID, s.Current.Title)
-		}
-		ui.Text(c, line+"　"+s.Message)
-		prog := func(label string, done, total int, unit string) {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, label).Width(70)
-				v := 0.0
-				if total > 0 {
-					v = float64(done) / float64(total)
-				}
-				ui.Progress(c, v).Label(label).Width(320)
-				ui.Textf(c, "%d / %d %s", done, total, unit).TextColor(muted)
-			})
-		}
-		prog("当前作品", s.ItemDone, s.ItemTotal, "页")
-		prog("总体进度", s.DoneItems, s.TotalItems, fmt.Sprintf("部，剩余 %d 部", s.QueueLen))
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "暂停").Disabled(s.State != "running").Clicked() {
-				a.cr.Pause()
-			}
-			if ui.Button(c, "继续").Disabled(s.State == "running" || s.State == "pausing" || s.QueueLen == 0).Clicked() {
-				a.cr.Resume()
-			}
-			if len(s.Errors) > 0 {
-				last := s.Errors[max(0, len(s.Errors)-2):]
-				ui.Text(c, fmt.Sprintf("失败 %d 项：%s", len(s.Errors), strings.Join(last, "；"))).TextColor(t.Danger).SingleLine().Shrink(1)
-			}
-		})
-		section("远程目录")
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
 			if ui.Button(c, "重新获取").Disabled(a.remoteLoading).Clicked() {
 				a.loadRemote(true)
 			}
@@ -775,7 +797,7 @@ func (a *app) settingsBody(c *ui.Context) {
 			if ui.Button(c, "下载全部").Disabled(len(a.remote) == 0).Clicked() {
 				a.cr.Start(a.remote)
 			}
-			ui.Text(c, a.remoteMsg).TextColor(muted)
+			ui.Text(c, a.remoteMsg).TextColor(muted).Shrink(1)
 		})
 		ui.List(c, &a.list, len(a.remoteFilter), func(i int) {
 			it := a.remote[a.remoteFilter[i]]
@@ -802,9 +824,123 @@ func (a *app) settingsBody(c *ui.Context) {
 				}
 				ui.Text(c, st).Width(56).TextColor(col)
 			})
-		}).Grow(1).MinHeight(200).Border(1, t.Border).Radius(6)
+		}).Grow(1).MinHeight(120).Border(1, t.Border).Radius(6)
 		ui.Text(c, "数据来源：国際日本文化研究センター「艶本資料データベース」。下载按设定间隔逐个请求，遵守 robots.txt，可随时暂停；重启后可继续未完成的队列，已下载的页面会自动跳过。").FontSize(12).TextColor(muted)
 	})
+}
+
+func (a *app) settingsBody(c *ui.Context) {
+	t := c.Theme()
+	muted := t.TextMuted
+	ui.Scroll(c.Key("settings-form")).Grow(1).MinHeight(0).Children(func() {
+		section := func(s string) { ui.Text(c, s).FontSize(15).Bold().Margin(12, 0, 4, 0) }
+		ui.Column(c).Gap(8).Children(func() {
+			section("基本设置")
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "数据文件夹")
+				ui.Text(c, shortPath(a.conf.DataDir)).TextColor(muted).SingleLine().Ellipsis("…").Shrink(1).MinWidth(0).Tooltip(a.conf.DataDir)
+				if ui.Button(c, "选择文件夹…").Clicked() {
+					a.pickFolder()
+				}
+			})
+			// The site geoblocks whole regions: from a blocked IP every request
+			// returns 403 no matter how often it is retried, so the proxy is the
+			// one setting a user cannot do without. It goes first, with the same
+			// explicit text label the other rows use — ui.SearchField's own Label
+			// is not drawn, which made the proxy box look like a stray search box
+			// and left people unable to find it.
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, proxyLabel)
+				ui.SearchField(c, &a.proxy).Placeholder("http://127.0.0.1:7897").Width(260)
+				ui.Text(c, "填好后点下面的「保存」").TextColor(muted)
+			})
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "请求间隔（秒，最小 1）")
+				ui.NumberInput(c, &a.delay, MinDelay, 30, 0.1).Label("请求间隔").Width(130)
+				if ui.Button(c, "保存").Clicked() {
+					// Proxy and delay are both written on save; stopping a running
+					// download to change the proxy would lose the queue.
+					a.conf.Delay = max(MinDelay, a.delay)
+					a.conf.Proxy = strings.TrimSpace(a.proxy)
+					a.delay = a.conf.Delay
+					HttpProxy = a.conf.Proxy
+					_ = a.conf.Save()
+					if !a.cr.Running() {
+						a.newCrawler()
+					}
+					a.confMsg = "已保存"
+				}
+				ui.Text(c, a.confMsg).TextColor(muted)
+			})
+			section("示例数据")
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				if ui.Button(c, "下载示例数据").Disabled(a.sampleBusy).Clicked() {
+					a.downloadSample()
+				}
+				msg := a.sampleMsg
+				if msg == "" {
+					msg = "从 GitHub 最新发布版下载 3 部示例作品（约 190 MB）"
+				}
+				ui.Text(c, msg).TextColor(muted)
+			})
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				if ui.Button(c, "导入本地数据包…").Disabled(a.sampleBusy).Clicked() {
+					a.importLocal()
+				}
+				ui.Text(c, "选择用户脚本导出的 ehonshelf-*.zip（可多选），已有文件不会被覆盖").TextColor(muted)
+			})
+			section("下载进度")
+			s := a.status
+			line := stateNames[s.State]
+			if s.Current != nil {
+				line += fmt.Sprintf("：%d %s", s.Current.ID, s.Current.Title)
+			}
+			ui.Text(c, line+"　"+s.Message)
+			prog := func(label string, done, total int, unit string) {
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, label).Width(70)
+					v := 0.0
+					if total > 0 {
+						v = float64(done) / float64(total)
+					}
+					ui.Progress(c, v).Label(label).Width(320)
+					ui.Textf(c, "%d / %d %s", done, total, unit).TextColor(muted)
+				})
+			}
+			prog("当前作品", s.ItemDone, s.ItemTotal, "页")
+			prog("总体进度", s.DoneItems, s.TotalItems, fmt.Sprintf("部，剩余 %d 部", s.QueueLen))
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				if ui.Button(c, "暂停").Disabled(s.State != "running").Clicked() {
+					a.cr.Pause()
+				}
+				if ui.Button(c, "继续").Disabled(s.State == "running" || s.State == "pausing" || s.QueueLen == 0).Clicked() {
+					a.cr.Resume()
+				}
+				if len(s.Errors) > 0 {
+					last := s.Errors[max(0, len(s.Errors)-2):]
+					ui.Text(c, fmt.Sprintf("失败 %d 项：%s", len(s.Errors), strings.Join(last, "；"))).TextColor(t.Danger).SingleLine().Shrink(1)
+				}
+			})
+		})
+	})
+}
+
+func shortPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	path, home = filepath.Clean(path), filepath.Clean(home)
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(os.PathSeparator)) {
+		return "~" + path[len(home):]
+	}
+	return path
 }
 
 func (a *app) downloadSample() {
@@ -918,7 +1054,7 @@ func main() {
 	a.firstRun()
 	mygo.App.WhenReady(func() {
 		mygo.App.SetMenu(a.menu())
-		a.win = mygo.NewWindow(mygo.WindowOptions{
+		a.win = mygo.NewWindow(ehonui.Frame(mygo.WindowOptions{
 			Title:     "艳本资料书架",
 			Width:     1200,
 			Height:    820,
@@ -926,7 +1062,8 @@ func main() {
 			MinHeight: 480,
 			StateKey:  "main",
 			Content:   ui.View(a.viewRoot),
-		})
+		}))
+		a.shell.SetWindow(a.win)
 		a.update = a.win.Update
 		a.rescan()
 		// EHONSHELF_VIEW=settings opens the settings first (for screenshots and support).

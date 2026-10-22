@@ -167,7 +167,7 @@ func TestLogsViewRenders(t *testing.T) {
 	tt := ui.NewTester(a.viewRoot, 1000, 700)
 	tt.Frame()
 
-	for _, want := range []string{"运行日志", "2 条", "清空", "复制全部", "HTTP 403", "重试中"} {
+	for _, want := range []string{"日志", "2 条", "清空", "复制全部", "HTTP 403", "重试中"} {
 		if !tt.HasText(want) {
 			t.Errorf("logs view missing %q; texts=%q", want, tt.Texts())
 		}
